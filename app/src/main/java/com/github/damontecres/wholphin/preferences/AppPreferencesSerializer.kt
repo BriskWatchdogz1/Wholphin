@@ -174,6 +174,7 @@ class AppPreferencesSerializer
                                 showBackdrop = true
                                 showLyrics = true
                                 showAlbumArt = true
+                                audioNormalization = AppPreference.AudioNormalization.defaultValue
                             }.build()
 
                     experimentalPreferences =
