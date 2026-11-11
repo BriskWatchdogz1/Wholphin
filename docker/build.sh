@@ -22,9 +22,13 @@
 #                                   build.env). It holds WHOLPHIN_KEYSTORE_FILE (host path),
 #                                   WHOLPHIN_KEYSTORE_PASSWORD, WHOLPHIN_KEY_ALIAS and
 #                                   WHOLPHIN_KEY_PASSWORD. Without it release builds are unsigned.
+#   WHOLPHIN_EXTENSIONS_PROPERTIES  Gradle properties file with WholphinExtensionsUsername and
+#                                   WholphinExtensionsPassword (see DEVELOPMENT.md); default:
+#                                   ~/.gradle/gradle.properties. Without them the app builds
+#                                   without the native extensions.
 #
-# The signing values reach Gradle only as environment variables inside the container; see the
-# "local" signing config in app/build.gradle.kts.
+# The signing values and the extension credentials reach Gradle only as environment variables
+# inside the container; see the "local" signing config in app/build.gradle.kts.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -103,6 +107,22 @@ if [ -f "${signing_env}" ]; then
     fi
 fi
 
+# Native extensions: the GitHub Packages credentials become ORG_GRADLE_PROJECT_* variables, which
+# Gradle reads as properties; docker gets only the variable names, never the values
+extension_args=()
+extensions_props="${WHOLPHIN_EXTENSIONS_PROPERTIES:-${HOME}/.gradle/gradle.properties}"
+if [ -f "${extensions_props}" ]; then
+    for key in WholphinExtensionsUsername WholphinExtensionsPassword; do
+        value="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "${extensions_props}" |
+            tail -n 1 | sed 's/[[:space:]]*$//')"
+        if [ -n "${value}" ]; then
+            export "ORG_GRADLE_PROJECT_${key}=${value}"
+            extension_args+=(-e "ORG_GRADLE_PROJECT_${key}")
+        fi
+    done
+    unset value
+fi
+
 case "${1:-}" in
     --image)
         build_image
@@ -171,5 +191,5 @@ if [ $# -eq 0 ]; then
     set -- assembleDefaultRelease
 fi
 
-exec docker run "${run_args[@]}" "${signing_args[@]}" "${image}" \
+exec docker run "${run_args[@]}" "${signing_args[@]}" "${extension_args[@]}" "${image}" \
     ./gradlew "${gradle_args[@]}" "$@"
