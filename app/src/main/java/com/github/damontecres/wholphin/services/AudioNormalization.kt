@@ -1,5 +1,6 @@
 package com.github.damontecres.wholphin.services
 
+import android.media.audiofx.AudioEffect
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Handler
 import android.os.Looper
@@ -22,18 +23,39 @@ import kotlin.math.roundToInt
  * both on the song (`BaseItemDto.normalizationGain` and `albumNormalizationGain`). This object
  * decides which of the two to use and how to apply the result:
  *
- * - A negative gain (the song is louder than the reference, the usual case) becomes the player
- *   volume, 10^(dB/20). That is exact and does not involve the audio effect chain.
- * - A positive gain needs amplification, which the player volume cannot provide, so it becomes the
- *   target gain of a [LoudnessEnhancer] on the audio session, in millibels. The effect's compressor
- *   keeps the amplified signal from clipping.
+ * - [HEADROOM_DB] is subtracted from every gain first, so that nearly every song ends up needing an
+ *   attenuation rather than an amplification.
+ * - An attenuation becomes the player volume, 10^(dB/20). That is exact and does not involve the
+ *   audio effect chain.
+ * - What is left of an amplification after the headroom needs more than unity gain, which the player
+ *   volume cannot provide, so it becomes the target gain of a [LoudnessEnhancer] on the audio
+ *   session, in millibels.
  *
- * The enhancer is deliberately not used to turn songs down: the platform effect multiplies the input
- * by 10^(mB/2000) and then runs it through a compressor whose knee sits at -8 dBFS whatever the
- * target gain is (AOSP frameworks/av, media/libeffects/loudness), so it would also compress every
- * song it attenuates.
+ * The enhancer is used as little as possible because it is a compressor, not a plain gain: the
+ * platform effect multiplies the input by 10^(mB/2000) and then compresses everything above a knee
+ * of -8 dBFS at a ratio of 7:1 (AOSP frameworks/av, media/libeffects/loudness; the knee depends on
+ * the target gain but never rises above -8 dBFS). Peaks of ordinary music sit well above that knee,
+ * so the effect audibly compresses every song it touches, including songs it would only turn down.
+ * Keeping it off for every song that fits into the headroom keeps those songs untouched; only songs
+ * that are quieter than the reference by more than the headroom go through it, and there the
+ * compression is the price for not clipping.
  */
 object AudioNormalization {
+    /**
+     * Fixed attenuation on top of the server's gain, in dB.
+     *
+     * With the server's reference of -18 LUFS, songs down to -24 LUFS are played through the player
+     * volume alone. The listener compensates once with the device volume.
+     */
+    const val HEADROOM_DB = 6f
+
+    /**
+     * Whether [mode] applies any gain at all
+     */
+    fun isActive(mode: AudioNormalizationMode): Boolean =
+        mode == AudioNormalizationMode.AUDIO_NORMALIZATION_TRACK ||
+            mode == AudioNormalizationMode.AUDIO_NORMALIZATION_ALBUM
+
     /**
      * Pick the gain to apply for a song, in dB, or null if nothing should be applied.
      *
@@ -62,10 +84,11 @@ object AudioNormalization {
         if (gainDb == null || !gainDb.isFinite()) {
             return GainPlan.NONE
         }
-        return if (gainDb < 0f) {
-            GainPlan(volume = toLinear(gainDb), boostMb = 0)
+        val appliedDb = gainDb - HEADROOM_DB
+        return if (appliedDb <= 0f) {
+            GainPlan(appliedDb = appliedDb, volume = toLinear(appliedDb), boostMb = 0)
         } else {
-            GainPlan(volume = 1f, boostMb = toMillibels(gainDb))
+            GainPlan(appliedDb = appliedDb, volume = 1f, boostMb = toMillibels(appliedDb))
         }
     }
 
@@ -81,19 +104,36 @@ object AudioNormalization {
 }
 
 /**
- * How a gain is applied: [volume] for the player (1.0 is unity) and [boostMb] for the loudness
- * enhancer (0 disables it)
+ * How a gain is applied: [appliedDb] is the gain after the headroom, [volume] goes to the player
+ * (1.0 is unity) and [boostMb] to the loudness enhancer (0 disables it)
  */
 data class GainPlan(
+    val appliedDb: Float,
     val volume: Float,
     val boostMb: Int,
 ) {
     val boostEnabled: Boolean get() = boostMb > 0
 
     companion object {
-        val NONE = GainPlan(volume = 1f, boostMb = 0)
+        val NONE = GainPlan(appliedDb = 0f, volume = 1f, boostMb = 0)
     }
 }
+
+/**
+ * What [AudioNormalizer] did for the current item, for the log and for tests
+ */
+data class AppliedGain(
+    /**
+     * The gain the server reported for the chosen mode, null if it had none
+     */
+    val serverGainDb: Float?,
+    val plan: GainPlan,
+    /**
+     * Whether the loudness enhancer is enabled now; false when the plan has no boost, when there is
+     * no enhancer, or when the platform refused to enable it
+     */
+    val boostActive: Boolean,
+)
 
 /**
  * The part of [LoudnessEnhancer] that [AudioNormalizer] uses, so that it can be replaced in tests
@@ -101,7 +141,10 @@ data class GainPlan(
 interface LoudnessBooster {
     fun setTargetGain(gainMb: Int)
 
-    fun setEnabled(enabled: Boolean)
+    /**
+     * Enable or disable the effect and return whether it is enabled afterwards
+     */
+    fun setEnabled(enabled: Boolean): Boolean
 
     fun release()
 }
@@ -113,8 +156,13 @@ private class PlatformLoudnessBooster(
 
     override fun setTargetGain(gainMb: Int) = enhancer.setTargetGain(gainMb)
 
-    override fun setEnabled(enabled: Boolean) {
-        enhancer.setEnabled(enabled)
+    override fun setEnabled(enabled: Boolean): Boolean {
+        // Unlike setTargetGain, AudioEffect.setEnabled reports a refusal through its return value
+        val status = enhancer.setEnabled(enabled)
+        if (status != AudioEffect.SUCCESS) {
+            Timber.w("AudioNormalization: LoudnessEnhancer.setEnabled(%s) returned %d", enabled, status)
+        }
+        return enhancer.enabled
     }
 
     override fun release() = enhancer.release()
@@ -140,6 +188,12 @@ class AudioNormalizer(
                 applyToCurrentItem()
             }
         }
+
+    /**
+     * The outcome of the most recent application, null before the first one
+     */
+    var lastApplied: AppliedGain? = null
+        private set
 
     /**
      * Start following the player. The enhancer attaches to the player's current audio session and
@@ -185,28 +239,34 @@ class AudioNormalizer(
         val gainDb = AudioNormalization.selectGain(mode, audio?.normalizationGain, audio?.albumNormalizationGain)
         val plan = AudioNormalization.plan(gainDb)
         player.volume = plan.volume
-        val boosted =
+        val boostActive =
             booster?.let { booster ->
                 runCatching {
                     booster.setTargetGain(plan.boostMb)
                     booster.setEnabled(plan.boostEnabled)
-                    plan.boostEnabled
                 }.getOrElse {
                     Timber.w(it, "AudioNormalization: could not set a boost of %d mB", plan.boostMb)
                     runCatching { booster.setEnabled(false) }
                     false
                 }
             } ?: false
+        if (plan.boostEnabled && !boostActive) {
+            Timber.w("AudioNormalization: a boost of %d mB was wanted but the enhancer is not active", plan.boostMb)
+        }
+        lastApplied = AppliedGain(gainDb, plan, boostActive)
         if (audio != null) {
             Timber.i(
-                "AudioNormalization: mode=%s track=%s dB album=%s dB -> %s dB (volume=%.3f, boost=%d mB, boost enabled=%s) for %s",
+                "AudioNormalization: mode=%s track=%s dB album=%s dB -> %s dB, applied %.2f dB after %.1f dB headroom " +
+                    "(volume=%.3f, boost=%d mB, boost active=%s) for %s",
                 mode,
                 audio.normalizationGain,
                 audio.albumNormalizationGain,
                 gainDb,
+                plan.appliedDb,
+                AudioNormalization.HEADROOM_DB,
                 plan.volume,
                 plan.boostMb,
-                boosted,
+                boostActive,
                 audio.title,
             )
         }
