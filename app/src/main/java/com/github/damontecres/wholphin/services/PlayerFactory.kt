@@ -249,22 +249,11 @@ class PlayerFactory
             tunneling: Boolean? = null,
             disableAudioOffload: Boolean = false,
         ) = DefaultTrackSelector(context).apply {
-            val offloadMode =
-                if (disableAudioOffload) {
-                    AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
-                } else {
-                    AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED
-                }
             setParameters(
                 buildUponParameters()
                     .apply {
                         tunneling?.let { setTunnelingEnabled(tunneling) }
-                    }.setAudioOffloadPreferences(
-                        AudioOffloadPreferences
-                            .Builder()
-                            .setAudioOffloadMode(offloadMode)
-                            .build(),
-                    ),
+                    }.setAudioOffloadPreferences(audioOffloadPreferences(disableAudioOffload)),
             )
         }
 
@@ -274,6 +263,35 @@ class PlayerFactory
                 .setCallback(TrustAllControllersCallback)
                 .build()
     }
+
+/**
+ * The track selector's audio offload preference: offload lets the DSP decode, [disableAudioOffload]
+ * keeps decoding in software
+ */
+fun audioOffloadPreferences(disableAudioOffload: Boolean): AudioOffloadPreferences {
+    val offloadMode =
+        if (disableAudioOffload) {
+            AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+        } else {
+            AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED
+        }
+    return AudioOffloadPreferences
+        .Builder()
+        .setAudioOffloadMode(offloadMode)
+        .build()
+}
+
+/**
+ * Change whether audio may be offloaded on a live player. The player re-selects its tracks when the
+ * preference actually changes and keeps playing otherwise.
+ */
+fun Player.setAudioOffloadDisabled(disableAudioOffload: Boolean) {
+    trackSelectionParameters =
+        trackSelectionParameters
+            .buildUpon()
+            .setAudioOffloadPreferences(audioOffloadPreferences(disableAudioOffload))
+            .build()
+}
 
 /**
  * Since media3 1.11, untrusted controllers (e.g. Google Home's Cast bridge, `com.google.android.apps.mediashell`)
