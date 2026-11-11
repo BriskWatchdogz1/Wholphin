@@ -42,6 +42,13 @@ val isBuildingBundle =
         gradle.startParameter.taskNames.any { it.lowercase().contains("bundle") }
     }
 
+// Local builds: an optional application id suffix (-PapplicationIdSuffix=.local) lets the build
+// install next to the upstream app, and a release signing config comes from the environment
+// (WHOLPHIN_KEYSTORE_FILE, WHOLPHIN_KEYSTORE_PASSWORD, WHOLPHIN_KEY_ALIAS, WHOLPHIN_KEY_PASSWORD),
+// see docker/build.sh
+val localApplicationIdSuffix = providers.gradleProperty("applicationIdSuffix").orElse("")
+val localKeystoreFile = providers.environmentVariable("WHOLPHIN_KEYSTORE_FILE").orElse("")
+
 val gitTags =
     providers
         .exec { commandLine("git", "tag", "--list", "v*", "p*") }
@@ -72,7 +79,7 @@ configure<ApplicationExtension> {
     compileSdk = libs.versions.compileSdk.getInt()
 
     defaultConfig {
-        applicationId = "com.github.damontecres.wholphin"
+        applicationId = "com.github.damontecres.wholphin" + localApplicationIdSuffix.get()
         minSdk = libs.versions.minSdk.getInt()
         targetSdk = libs.versions.targetSdk.getInt()
         versionCode = gitTags.trim().lines().size
@@ -98,6 +105,18 @@ configure<ApplicationExtension> {
                 enableV4Signing = true
             }
         }
+        if (localKeystoreFile.get().isNotBlank()) {
+            create("local") {
+                storeFile = file(localKeystoreFile.get())
+                storePassword = System.getenv("WHOLPHIN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("WHOLPHIN_KEY_ALIAS")
+                keyPassword = System.getenv("WHOLPHIN_KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -111,6 +130,8 @@ configure<ApplicationExtension> {
             isDebuggable = false
             if (shouldSign.get()) {
                 signingConfig = signingConfigs.getByName("ci")
+            } else if (localKeystoreFile.get().isNotBlank()) {
+                signingConfig = signingConfigs.getByName("local")
             } else {
                 val localPropertiesFile = project.rootProject.file("local.properties")
                 if (localPropertiesFile.exists()) {
