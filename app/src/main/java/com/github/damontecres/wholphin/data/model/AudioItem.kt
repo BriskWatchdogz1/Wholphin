@@ -25,6 +25,14 @@ data class AudioItem(
     val runtime: Duration?,
     val imageUrl: String?,
     val hasLyrics: Boolean,
+    /**
+     * Gain in dB the server computed to bring this song to its reference loudness, if known
+     */
+    val normalizationGain: Float? = null,
+    /**
+     * Gain in dB the server computed for the whole album this song belongs to, if known
+     */
+    val albumNormalizationGain: Float? = null,
 ) {
     companion object {
         private var keyTracker = 0L
@@ -46,6 +54,8 @@ data class AudioItem(
                 runtime = item.data.runTimeTicks?.ticks,
                 imageUrl = imageUrl,
                 hasLyrics = item.data.hasLyrics == true,
+                normalizationGain = item.data.normalizationGain,
+                albumNormalizationGain = item.data.albumNormalizationGain,
             )
     }
 }

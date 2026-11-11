@@ -256,6 +256,28 @@ sealed interface AppPreference<Pref, T> {
                 summaryOff = R.string.hide,
             )
 
+        val AudioNormalization =
+            AppChoicePreference<AppPreferences, AudioNormalizationMode>(
+                title = R.string.audio_normalization,
+                defaultValue = AudioNormalizationMode.AUDIO_NORMALIZATION_TRACK,
+                getter = { it.musicPreferences.audioNormalization },
+                setter = { prefs, value ->
+                    prefs.updateMusicPreferences { audioNormalization = value }
+                },
+                displayValues = R.array.audio_normalization_modes,
+                subtitles = R.array.audio_normalization_modes_summary,
+                indexToValue = {
+                    AudioNormalizationMode.forNumber(it) ?: AudioNormalizationMode.AUDIO_NORMALIZATION_TRACK
+                },
+                valueToIndex = {
+                    if (it != AudioNormalizationMode.UNRECOGNIZED) {
+                        it.number
+                    } else {
+                        AudioNormalizationMode.AUDIO_NORMALIZATION_TRACK.number
+                    }
+                },
+            )
+
         val AutoPlayNextUp =
             AppSwitchPreference<AppPreferences>(
                 title = R.string.auto_play_next,
@@ -1331,6 +1353,7 @@ val advancedPreferences =
                         AppPreference.DpadSeekModePref,
                         AppPreference.MaxResolutionPref,
                         AppPreference.MaxBitrate,
+                        AppPreference.AudioNormalization,
                         AppPreference.RefreshRateSwitching,
                         AppPreference.ResolutionSwitching,
                         AppPreference.PlaybackDebugInfo,

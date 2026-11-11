@@ -222,11 +222,18 @@ message PhotoPreferences{
   bool slideshow_play_videos = 2;
 }
 
+enum AudioNormalizationMode {
+  AUDIO_NORMALIZATION_OFF = 0;
+  AUDIO_NORMALIZATION_TRACK = 1;
+  AUDIO_NORMALIZATION_ALBUM = 2;
+}
+
 message MusicPreferences {
   bool show_lyrics = 1;
   bool show_visualizer = 2;
   bool show_album_Art = 3;
   bool show_backdrop = 4;
+  AudioNormalizationMode audio_normalization = 5;
 }
 
 enum HdrOverrideMode{

@@ -13,6 +13,7 @@ import androidx.media3.session.MediaSession
 import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.data.model.AudioItem
 import com.github.damontecres.wholphin.data.model.BaseItem
+import com.github.damontecres.wholphin.preferences.AudioNormalizationMode
 import com.github.damontecres.wholphin.preferences.enabled
 import com.github.damontecres.wholphin.preferences.get
 import com.github.damontecres.wholphin.services.hilt.DefaultCoroutineScope
@@ -36,7 +37,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
@@ -85,18 +88,29 @@ class MusicService
 
         private val audioFormats by lazy { listOf(*supportedAudioCodecs) }
 
+        private val audioNormalizer = AudioNormalizer()
+
         val player: Player by lazy {
+            val appPreferences = runBlocking { userPreferencesService.getCurrent().appPreferences }
             val disableAudioOffload =
-                runBlocking {
-                    userPreferencesService
-                        .getCurrent()
-                        .appPreferences.experimentalPreferences
-                        .get { disableAudioOffload } ?: false
-                }
+                appPreferences.experimentalPreferences.get { disableAudioOffload } ?: false
+            val normalization = appPreferences.musicPreferences.audioNormalization
+            // The loudness enhancer behind the normalization is not an offloadable effect: the audio
+            // framework drops an offloaded track the moment such an effect is enabled on its session,
+            // so keep the decoding in software while normalization is on
+            val normalizationOn = normalization != AudioNormalizationMode.AUDIO_NORMALIZATION_OFF
             playerFactory
-                .createAudioPlayer(disableAudioOffload = disableAudioOffload)
+                .createAudioPlayer(disableAudioOffload = disableAudioOffload || normalizationOn)
                 .also {
                     it.addListener(MusicPlayerListener(it, _state))
+                    audioNormalizer.mode = normalization
+                    audioNormalizer.attach(it)
+                    userPreferencesService.flow
+                        .map { prefs -> prefs.appPreferences.musicPreferences.audioNormalization }
+                        .distinctUntilChanged()
+                        .onEach { mode -> onMain { audioNormalizer.mode = mode } }
+                        .catch { ex -> Timber.e(ex, "Error following the audio normalization setting") }
+                        .launchIn(defaultScope)
                 }
         }
 
