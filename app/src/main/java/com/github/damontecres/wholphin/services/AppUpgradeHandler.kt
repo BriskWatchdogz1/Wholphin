@@ -506,5 +506,14 @@ class AppUpgradeHandler
                     }
                 }
             }
+
+            if (previous.isEqualOrBefore(Version.fromString("1.1.1-2-g0"))) {
+                // Audio normalization arrived with a default other than the proto3 zero value
+                appPreferences.updateData {
+                    it.updateMusicPreferences {
+                        audioNormalization = AppPreference.AudioNormalization.defaultValue
+                    }
+                }
+            }
         }
     }
