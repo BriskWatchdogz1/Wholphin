@@ -95,12 +95,14 @@ class MusicService
             val disableAudioOffload =
                 appPreferences.experimentalPreferences.get { disableAudioOffload } ?: false
             val normalization = appPreferences.musicPreferences.audioNormalization
+
             // The loudness enhancer behind the normalization is not an offloadable effect: the audio
             // framework drops an offloaded track the moment such an effect is enabled on its session,
             // so keep the decoding in software while normalization is on
-            val normalizationOn = normalization != AudioNormalizationMode.AUDIO_NORMALIZATION_OFF
+            fun offloadDisabled(mode: AudioNormalizationMode) = disableAudioOffload || AudioNormalization.isActive(mode)
+
             playerFactory
-                .createAudioPlayer(disableAudioOffload = disableAudioOffload || normalizationOn)
+                .createAudioPlayer(disableAudioOffload = offloadDisabled(normalization))
                 .also {
                     it.addListener(MusicPlayerListener(it, _state))
                     audioNormalizer.mode = normalization
@@ -108,8 +110,14 @@ class MusicService
                     userPreferencesService.flow
                         .map { prefs -> prefs.appPreferences.musicPreferences.audioNormalization }
                         .distinctUntilChanged()
-                        .onEach { mode -> onMain { audioNormalizer.mode = mode } }
-                        .catch { ex -> Timber.e(ex, "Error following the audio normalization setting") }
+                        .onEach { mode ->
+                            onMain {
+                                // The re-selection runs asynchronously, so a first enable may still hit the
+                                // offloaded track once; the player then recovers in software
+                                it.setAudioOffloadDisabled(offloadDisabled(mode))
+                                audioNormalizer.mode = mode
+                            }
+                        }.catch { ex -> Timber.e(ex, "Error following the audio normalization setting") }
                         .launchIn(defaultScope)
                 }
         }
