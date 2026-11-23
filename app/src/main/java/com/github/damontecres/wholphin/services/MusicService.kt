@@ -53,6 +53,7 @@ import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.PlaystateCommand
 import org.jellyfin.sdk.model.api.PlaystateMessage
+import org.jellyfin.sdk.model.api.QueueItem
 import org.jellyfin.sdk.model.extensions.ticks
 import org.jellyfin.sdk.model.serializer.toUUID
 import org.jellyfin.sdk.model.serializer.toUUIDOrNull
@@ -130,9 +131,21 @@ class MusicService
                         activityTracker =
                             TrackActivityPlaybackListener(api, player) {
                                 state.value.currentItemId?.let { itemId ->
+                                    // The player may only be read on the main thread
+                                    val (queue, playlistItemId) =
+                                        onMain {
+                                            queueReport(
+                                                List(player.mediaItemCount) {
+                                                    player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem
+                                                },
+                                                player.currentMediaItemIndex,
+                                            )
+                                        }
                                     PlaybackItemState(
                                         itemId = itemId,
                                         playMethod = PlayMethod.DIRECT_PLAY,
+                                        playlistItemId = playlistItemId,
+                                        nowPlayingQueue = queue,
 //                                        playSessionId = mediaSession?.id,
                                     )
                                 }
@@ -648,3 +661,18 @@ fun rememberQueue(
             override fun get(index: Int): AudioItem = player.getMediaItemAt(index).localConfiguration?.tag as AudioItem
         }
     }
+
+/**
+ * Maps the queue to what the server and remote controls expect in a session's NowPlayingQueue
+ *
+ * The playlist item id is unique per queue entry, so the same song queued twice stays distinguishable.
+ * Entries without an [AudioItem] tag are skipped, the current id is null if the index is not a valid entry.
+ */
+internal fun queueReport(
+    items: List<AudioItem?>,
+    currentIndex: Int,
+): Pair<List<QueueItem>, String?> =
+    items.filterNotNull().map { QueueItem(id = it.id, playlistItemId = playlistItemId(it)) } to
+        items.getOrNull(currentIndex)?.let { playlistItemId(it) }
+
+private fun playlistItemId(item: AudioItem) = "playlistItem" + item.key

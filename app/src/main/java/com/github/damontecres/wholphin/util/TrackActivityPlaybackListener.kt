@@ -1,7 +1,9 @@
 package com.github.damontecres.wholphin.util
 
 import androidx.annotation.OptIn
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.playback.CurrentPlayback
@@ -14,6 +16,7 @@ import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaybackProgressInfo
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
+import org.jellyfin.sdk.model.api.QueueItem
 import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.extensions.inWholeTicks
 import timber.log.Timber
@@ -31,7 +34,7 @@ import kotlin.time.Duration.Companion.seconds
 class TrackActivityPlaybackListener(
     private val api: ApiClient,
     private val player: Player,
-    private val getState: () -> PlaybackItemState?,
+    private val getState: suspend () -> PlaybackItemState?,
 ) : Player.Listener {
     private val coroutineScope = CoroutineScope(WholphinDispatchers.Main)
     private val task: TimerTask =
@@ -65,6 +68,8 @@ class TrackActivityPlaybackListener(
                         subtitleStreamIndex = state.subtitleStreamIndex,
                         playSessionId = state.playSessionId,
                         liveStreamId = state.liveStreamId,
+                        playlistItemId = state.playlistItemId,
+                        nowPlayingQueue = state.nowPlayingQueue,
                     ),
                 )
 
@@ -115,20 +120,42 @@ class TrackActivityPlaybackListener(
         }
     }
 
-    private fun saveActivity(position: Long) {
+    override fun onMediaItemTransition(
+        mediaItem: MediaItem?,
+        reason: Int,
+    ) {
+        if (initialized) saveActivity(-1, force = true)
+    }
+
+    override fun onTimelineChanged(
+        timeline: Timeline,
+        reason: Int,
+    ) {
+        if (initialized && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+            saveActivity(-1, force = true)
+        }
+    }
+
+    /**
+     * @param force report even at position 0, used for song and queue changes
+     */
+    private fun saveActivity(
+        position: Long,
+        force: Boolean = false,
+    ) {
         launch("saveActivity") {
             getState.invoke()?.let { state ->
                 val calcPosition =
                     withContext(WholphinDispatchers.Main) {
                         (if (position >= 0) position else player.currentPosition)
                     }
-                if (calcPosition > 0) {
+                if (force || calcPosition > 0) {
                     val isPaused = withContext(WholphinDispatchers.Main) { !player.isPlaying }
                     Timber.v("saveActivity: itemId=${state.itemId}, pos=$calcPosition")
                     api.sessionApi.reportPlaybackProgress(
                         PlaybackProgressInfo(
                             itemId = state.itemId,
-                            positionTicks = calcPosition.milliseconds.inWholeTicks,
+                            positionTicks = calcPosition.coerceAtLeast(0L).milliseconds.inWholeTicks,
                             canSeek = true,
                             isPaused = isPaused,
                             isMuted = false,
@@ -139,6 +166,8 @@ class TrackActivityPlaybackListener(
                             subtitleStreamIndex = state.subtitleStreamIndex,
                             playSessionId = state.playSessionId,
                             liveStreamId = state.liveStreamId,
+                            playlistItemId = state.playlistItemId,
+                            nowPlayingQueue = state.nowPlayingQueue,
                         ),
                     )
                 }
@@ -173,6 +202,8 @@ data class PlaybackItemState(
     val subtitleStreamIndex: Int? = null,
     val playSessionId: String? = null,
     val liveStreamId: String? = null,
+    val playlistItemId: String? = null,
+    val nowPlayingQueue: List<QueueItem>? = null,
 ) {
     constructor(
         playback: CurrentPlayback,
