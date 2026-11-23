@@ -233,6 +233,51 @@ class MusicService
         }
 
         /**
+         * Replace the queue with the given songs and start playing at [startIndex] and [startPositionMs]
+         */
+        suspend fun playQueue(
+            items: List<BaseItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ) {
+            Timber.d("playQueue: %s items, startIndex=%s, positionMs=%s", items.size, startIndex, startPositionMs)
+            val preferAc3Surround = preferAc3Surround()
+            val mediaItems =
+                items
+                    .filter { it.type == BaseItemKind.AUDIO }
+                    .map { convert(it, preferAc3Surround) }
+            withContext(WholphinDispatchers.Main) {
+                player.setMediaItems(mediaItems, startIndex, startPositionMs)
+                player.shuffleModeEnabled = false
+                updateQueueSize()
+                start()
+            }
+        }
+
+        /**
+         * Insert the given songs at [index] of the queue, or at the end if [index] is null; does not start playback
+         */
+        suspend fun insertIntoQueue(
+            items: List<BaseItem>,
+            index: Int?,
+        ) {
+            Timber.d("insertIntoQueue: %s items, index=%s", items.size, index)
+            val preferAc3Surround = preferAc3Surround()
+            val mediaItems =
+                items
+                    .filter { it.type == BaseItemKind.AUDIO }
+                    .map { convert(it, preferAc3Surround) }
+            withContext(WholphinDispatchers.Main) {
+                if (index != null) {
+                    player.addMediaItems(index, mediaItems)
+                } else {
+                    player.addMediaItems(mediaItems)
+                }
+                updateQueueSize()
+            }
+        }
+
+        /**
          * Add an item to the specified index of the queue. If no index specified, it will be added to the end.
          */
         suspend fun addToQueue(
