@@ -23,6 +23,7 @@ import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 /**
  * The songs of a remote play command in server order, where to start and at which position
@@ -90,6 +91,64 @@ internal fun planRemoteLoad(
         fromStart = itemIds.drop(start).chunked(REMOTE_CHUNK_SIZE),
         beforeStart = itemIds.take(start).chunked(REMOTE_CHUNK_SIZE),
     )
+}
+
+/**
+ * How a play command that lists the reported window of the queue relates to the actual queue
+ */
+internal sealed interface WindowMatch {
+    /** The command lists the window at [offset] of the queue unchanged: jump within the queue */
+    data class Jump(
+        val offset: Int,
+    ) : WindowMatch
+
+    /**
+     * The command lists the window at [offset] with one entry moved from [from] to [to]
+     * (relative to the window, same meaning as for `Player.moveMediaItem`)
+     */
+    data class Move(
+        val offset: Int,
+        val from: Int,
+        val to: Int,
+    ) : WindowMatch
+}
+
+/**
+ * Checks whether [ids] is the part of [queue] that was reported to the remote (see [reportedQueueRange]),
+ * possibly with one entry moved, so the command is a click or a drag in the remote's queue view
+ *
+ * The window may have shifted by a song or two since the remote loaded it, so every offset is tried,
+ * nearest to where the window currently sits first. Returns null if [ids] is anything else, such as a new album.
+ */
+internal fun matchQueueWindow(
+    queue: List<UUID>,
+    ids: List<UUID>,
+    currentIndex: Int,
+): WindowMatch? {
+    val length = ids.size
+    if (length < 2 || length != minOf(MAX_REPORTED_QUEUE, queue.size)) return null
+    val preferred = currentIndex - REPORTED_BEFORE_CURRENT
+    return (0..queue.size - length)
+        .sortedBy { abs(it - preferred) }
+        .firstNotNullOfOrNull { matchWindowAt(queue, ids, it) }
+}
+
+private fun matchWindowAt(
+    queue: List<UUID>,
+    ids: List<UUID>,
+    offset: Int,
+): WindowMatch? {
+    val length = ids.size
+    val first = (0 until length).firstOrNull { queue[offset + it] != ids[it] } ?: return WindowMatch.Jump(offset)
+    val last = (length - 1 downTo first).first { queue[offset + it] != ids[it] }
+    val forward =
+        ids[last] == queue[offset + first] &&
+            (first until last).all { ids[it] == queue[offset + it + 1] }
+    if (forward) return WindowMatch.Move(offset, first, last)
+    val backward =
+        ids[first] == queue[offset + last] &&
+            (first + 1..last).all { ids[it] == queue[offset + it - 1] }
+    return if (backward) WindowMatch.Move(offset, last, first) else null
 }
 
 /**
@@ -202,6 +261,7 @@ class RemotePlayService
             request: PlayRequest,
             ids: List<UUID>,
         ) {
+            if (followsQueueWindow(request, ids)) return
             val plan = planRemoteLoad(ids, request.startIndex)
             var batch = firstBatch(plan.fromStart, 0, request.startPositionTicks)
             var after = plan.fromStart.drop((batch?.chunkIndex ?: 0) + 1)
@@ -220,12 +280,47 @@ class RemotePlayService
             val queue = batch.queue
             cancelLoaders()
             val keys = musicService.playQueue(queue.items, queue.startIndex, queue.startPositionMs)
+            showNowPlaying()
+            startLoader(ids.size, keys.size, after, before, keys.firstOrNull(), keys.lastOrNull())
+        }
+
+        private suspend fun showNowPlaying() =
             withContext(WholphinDispatchers.Main) {
                 if (navigationManager.backStack.lastOrNull() !is Destination.NowPlaying) {
                     navigationManager.navigateTo(Destination.NowPlaying)
                 }
             }
-            startLoader(ids.size, keys.size, after, before, keys.firstOrNull(), keys.lastOrNull())
+
+        /**
+         * A remote shows only a window of a large queue. Clicking a song in it sends the window's ids again,
+         * dragging a song sends them with one entry moved. Replacing the queue with that window would drop
+         * the rest of it, so jump or move within the queue instead.
+         *
+         * @return true if the command was handled that way
+         */
+        private suspend fun followsQueueWindow(
+            request: PlayRequest,
+            ids: List<UUID>,
+        ): Boolean {
+            if (musicService.state.value.queueSize == 0) return false
+            val (queue, current) = musicService.queueSnapshot()
+            val match =
+                withContext(WholphinDispatchers.Default) { matchQueueWindow(queue, ids, current) }
+                    ?: return false
+            when (match) {
+                is WindowMatch.Jump -> {
+                    val index = match.offset + (request.startIndex?.takeIf { it in ids.indices } ?: 0)
+                    Timber.i("RemotePlay: jump to %d", index)
+                    musicService.playIndex(index)
+                }
+
+                is WindowMatch.Move -> {
+                    Timber.i("RemotePlay: move %d -> %d", match.offset + match.from, match.offset + match.to)
+                    musicService.moveQueue(match.offset + match.from, match.offset + match.to)
+                }
+            }
+            showNowPlaying()
+            return true
         }
 
         private fun logCommand(
