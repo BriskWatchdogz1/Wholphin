@@ -63,6 +63,15 @@ import javax.inject.Singleton
 import kotlin.time.Duration.Companion.seconds
 
 /**
+ * Containers the music player asks the server to send as they are: the supported codec names, which the
+ * server also matches as containers, plus Ogg, the container of .opus files and of most Vorbis files
+ *
+ * Without Ogg the server transcoded such songs into a stream of unknown length, which can be neither seeked
+ * nor resumed after a dropped connection.
+ */
+internal val musicContainers: List<String> by lazy { listOf(*supportedAudioCodecs, Codec.Audio.OGG) }
+
+/**
  * Manage the global state for playing music
  *
  * Has functions for modifying the queue
@@ -83,7 +92,7 @@ class MusicService
         private val _state = MutableStateFlow(MusicServiceState.EMPTY)
         val state: StateFlow<MusicServiceState> = _state
 
-        private val audioFormats by lazy { listOf(*supportedAudioCodecs) }
+        private val audioFormats by lazy { musicContainers }
 
         val player: Player by lazy {
             val disableAudioOffload =
