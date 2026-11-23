@@ -28,12 +28,13 @@ import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.GeneralCommandMessage
 import org.jellyfin.sdk.model.api.GeneralCommandType
 import org.jellyfin.sdk.model.api.MediaType
+import org.jellyfin.sdk.model.api.PlayMessage
 import org.jellyfin.sdk.model.api.UserUpdatedMessage
 import timber.log.Timber
 import javax.inject.Inject
 
 /**
- * Listens for basic messages from the server such as messages
+ * Listens for basic messages from the server such as display messages and play commands for music
  */
 @ActivityScoped
 class ServerEventListener
@@ -42,6 +43,7 @@ class ServerEventListener
         @param:ActivityContext private val context: Context,
         private val api: ApiClient,
         private val serverRepository: ServerRepository,
+        private val remotePlayService: RemotePlayService,
     ) : DefaultLifecycleObserver {
         private val activity = (context as AppCompatActivity)
 
@@ -65,7 +67,7 @@ class ServerEventListener
             if (server != null && user != null && api.baseUrl != null && api.accessToken != null) {
                 (context as AppCompatActivity).lifecycleScope.launchIO {
                     api.sessionApi.postCapabilities(
-                        playableMediaTypes = listOf(MediaType.VIDEO),
+                        playableMediaTypes = listOf(MediaType.VIDEO, MediaType.AUDIO),
                         supportedCommands =
                             listOf(
                                 GeneralCommandType.DISPLAY_MESSAGE,
@@ -118,6 +120,13 @@ class ServerEventListener
                                     }
                                 }.catch { ex ->
                                     Timber.e(ex, "Error in general message websocket subscription")
+                                }.launchIn(this@coroutineScope)
+
+                            api.webSocket
+                                .subscribe<PlayMessage>()
+                                .onEach { message -> message.data?.let(remotePlayService::handle) }
+                                .catch { ex ->
+                                    Timber.e(ex, "Error in play message websocket subscription")
                                 }.launchIn(this@coroutineScope)
 
                             api.webSocket
