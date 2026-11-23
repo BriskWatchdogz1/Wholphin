@@ -249,39 +249,36 @@ class MusicService
 
         /**
          * Replace the queue with the given songs and start playing at [startIndex] and [startPositionMs]
+         *
+         * @return the [AudioItem.key] of each queue entry created, in order
          */
         suspend fun playQueue(
             items: List<BaseItem>,
             startIndex: Int,
             startPositionMs: Long,
-        ) {
+        ): List<Long> {
             Timber.d("playQueue: %s items, startIndex=%s, positionMs=%s", items.size, startIndex, startPositionMs)
-            val preferAc3Surround = preferAc3Surround()
-            val mediaItems =
-                items
-                    .filter { it.type == BaseItemKind.AUDIO }
-                    .map { convert(it, preferAc3Surround) }
+            val mediaItems = convertSongs(items)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(mediaItems, startIndex, startPositionMs)
                 player.shuffleModeEnabled = false
                 updateQueueSize()
                 start()
             }
+            return mediaItems.map(::entryKey)
         }
 
         /**
          * Insert the given songs at [index] of the queue, or at the end if [index] is null; does not start playback
+         *
+         * @return the [AudioItem.key] of each queue entry created, in order
          */
         suspend fun insertIntoQueue(
             items: List<BaseItem>,
             index: Int?,
-        ) {
+        ): List<Long> {
             Timber.d("insertIntoQueue: %s items, index=%s", items.size, index)
-            val preferAc3Surround = preferAc3Surround()
-            val mediaItems =
-                items
-                    .filter { it.type == BaseItemKind.AUDIO }
-                    .map { convert(it, preferAc3Surround) }
+            val mediaItems = convertSongs(items)
             withContext(WholphinDispatchers.Main) {
                 if (index != null) {
                     player.addMediaItems(index, mediaItems)
@@ -290,7 +287,54 @@ class MusicService
                 }
                 updateQueueSize()
             }
+            return mediaItems.map(::entryKey)
         }
+
+        /**
+         * Insert the given songs right after the queue entry with [anchorKey], or right before it if [before]
+         *
+         * @return the [AudioItem.key] of each queue entry created, in order, or null (nothing inserted)
+         * if no entry has the key any more, because the queue was replaced, stopped, or the entry removed
+         */
+        suspend fun insertNextTo(
+            anchorKey: Long,
+            before: Boolean,
+            items: List<BaseItem>,
+        ): List<Long>? {
+            val mediaItems = convertSongs(items)
+            return withContext(WholphinDispatchers.Main) {
+                val anchor =
+                    (0 until player.mediaItemCount).firstOrNull {
+                        (player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem)?.key == anchorKey
+                    }
+                if (anchor == null) {
+                    null
+                } else {
+                    player.addMediaItems(if (before) anchor else anchor + 1, mediaItems)
+                    updateQueueSize()
+                    mediaItems.map(::entryKey)
+                }
+            }
+        }
+
+        /**
+         * The song ids of all queue entries in order and the index of the current entry
+         */
+        suspend fun queueSnapshot(): Pair<List<UUID>, Int> =
+            onMain {
+                List(player.mediaItemCount) {
+                    (player.getMediaItemAt(it).localConfiguration?.tag as AudioItem).id
+                } to player.currentMediaItemIndex
+            }
+
+        private suspend fun convertSongs(items: List<BaseItem>): List<MediaItem> {
+            val preferAc3Surround = preferAc3Surround()
+            return items
+                .filter { it.type == BaseItemKind.AUDIO }
+                .map { convert(it, preferAc3Surround) }
+        }
+
+        private fun entryKey(item: MediaItem) = (item.localConfiguration?.tag as AudioItem).key
 
         /**
          * Add an item to the specified index of the queue. If no index specified, it will be added to the end.
