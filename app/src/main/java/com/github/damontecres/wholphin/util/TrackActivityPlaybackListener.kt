@@ -51,10 +51,17 @@ class TrackActivityPlaybackListener(
     @Volatile
     private var initialized = false
 
+    @Volatile
+    private var reportedPlaylistItemId: String? = null
+
+    @Volatile
+    private var reportedQueue: List<QueueItem>? = null
+
     fun init() {
         launch("reportPlaybackStart") {
             getState.invoke()?.let { state ->
                 Timber.v("reportPlaybackStart for ${state.itemId}")
+                remember(state)
                 api.sessionApi.reportPlaybackStart(
                     PlaybackStartInfo(
                         canSeek = true,
@@ -132,24 +139,41 @@ class TrackActivityPlaybackListener(
         reason: Int,
     ) {
         if (initialized && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
-            saveActivity(-1, force = true)
+            saveActivity(-1, force = true, skipUnchangedQueue = true)
         }
+    }
+
+    private fun remember(state: PlaybackItemState) {
+        reportedPlaylistItemId = state.playlistItemId
+        reportedQueue = state.nowPlayingQueue
     }
 
     /**
      * @param force report even at position 0, used for song and queue changes
+     * @param skipUnchangedQueue skip the report if the playlist item and queue are what was reported last,
+     * such as when a large queue grows outside the reported part. Never skips without a queue.
      */
     private fun saveActivity(
         position: Long,
         force: Boolean = false,
+        skipUnchangedQueue: Boolean = false,
     ) {
         launch("saveActivity") {
             getState.invoke()?.let { state ->
+                if (skipUnchangedQueue &&
+                    state.nowPlayingQueue != null &&
+                    state.playlistItemId == reportedPlaylistItemId &&
+                    state.nowPlayingQueue == reportedQueue
+                ) {
+                    Timber.v("saveActivity: reported queue unchanged")
+                    return@launch
+                }
                 val calcPosition =
                     withContext(WholphinDispatchers.Main) {
                         (if (position >= 0) position else player.currentPosition)
                     }
                 if (force || calcPosition > 0) {
+                    remember(state)
                     val isPaused = withContext(WholphinDispatchers.Main) { !player.isPlaying }
                     Timber.v("saveActivity: itemId=${state.itemId}, pos=$calcPosition")
                     api.sessionApi.reportPlaybackProgress(

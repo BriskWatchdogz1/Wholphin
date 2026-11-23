@@ -134,11 +134,13 @@ class MusicService
                                     // The player may only be read on the main thread
                                     val (queue, playlistItemId) =
                                         onMain {
+                                            val current = player.currentMediaItemIndex
+                                            val range = reportedQueueRange(player.mediaItemCount, current)
                                             queueReport(
-                                                List(player.mediaItemCount) {
+                                                range.map {
                                                     player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem
                                                 },
-                                                player.currentMediaItemIndex,
+                                                current - range.first,
                                             )
                                         }
                                     PlaybackItemState(
@@ -674,5 +676,39 @@ internal fun queueReport(
 ): Pair<List<QueueItem>, String?> =
     items.filterNotNull().map { QueueItem(id = it.id, playlistItemId = playlistItemId(it)) } to
         items.getOrNull(currentIndex)?.let { playlistItemId(it) }
+
+/**
+ * The most queue entries reported to the server
+ *
+ * A remote control such as jellyfin-web loads the reported queue with one request that lists every id
+ * in the URL. 200 ids of 32 characters stay below the 8 KB request line limit that nginx and Kestrel
+ * apply by default, and below jellyfin-web's default limit of 300 items. A longer queue would also be
+ * sent again with every progress report.
+ */
+internal const val MAX_REPORTED_QUEUE = 200
+
+/**
+ * Entries before the current one that stay in the report, so a remote still shows the last songs
+ */
+internal const val REPORTED_BEFORE_CURRENT = 10
+
+/**
+ * The part of a queue of [size] entries to report, a window of at most [MAX_REPORTED_QUEUE] entries
+ * that keeps [REPORTED_BEFORE_CURRENT] entries before the current one
+ *
+ * [currentIndex] below 0 means there is no current entry, the window then starts at the front.
+ */
+internal fun reportedQueueRange(
+    size: Int,
+    currentIndex: Int,
+): IntRange {
+    val start =
+        if (currentIndex < 0) {
+            0
+        } else {
+            (currentIndex - REPORTED_BEFORE_CURRENT).coerceAtMost(size - MAX_REPORTED_QUEUE).coerceAtLeast(0)
+        }
+    return start until minOf(size, start + MAX_REPORTED_QUEUE)
+}
 
 private fun playlistItemId(item: AudioItem) = "playlistItem" + item.key
