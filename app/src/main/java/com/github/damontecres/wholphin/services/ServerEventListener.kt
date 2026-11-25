@@ -26,13 +26,12 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.GeneralCommandMessage
 import org.jellyfin.sdk.model.api.GeneralCommandType
-import org.jellyfin.sdk.model.api.PlayMessage
 import org.jellyfin.sdk.model.api.UserUpdatedMessage
 import timber.log.Timber
 import javax.inject.Inject
 
 /**
- * Listens for basic messages from the server such as display messages and play commands for music
+ * Listens for basic messages from the server such as display messages
  */
 @ActivityScoped
 class ServerEventListener
@@ -41,7 +40,6 @@ class ServerEventListener
         @param:ActivityContext private val context: Context,
         private val api: ApiClient,
         private val serverRepository: ServerRepository,
-        private val remotePlayService: RemotePlayService,
         private val remoteSession: RemoteSessionService,
     ) : DefaultLifecycleObserver {
         private val activity = (context as AppCompatActivity)
@@ -112,13 +110,6 @@ class ServerEventListener
                                     }
                                 }.catch { ex ->
                                     Timber.e(ex, "Error in general message websocket subscription")
-                                }.launchIn(this@coroutineScope)
-
-                            api.webSocket
-                                .subscribe<PlayMessage>()
-                                .onEach { message -> message.data?.let(remotePlayService::handle) }
-                                .catch { ex ->
-                                    Timber.e(ex, "Error in play message websocket subscription")
                                 }.launchIn(this@coroutineScope)
 
                             api.webSocket

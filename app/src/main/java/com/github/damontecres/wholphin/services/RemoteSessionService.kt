@@ -15,8 +15,10 @@ import kotlinx.coroutines.launch
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.sessionApi
 import org.jellyfin.sdk.api.sockets.SocketApiState
+import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.GeneralCommandType
 import org.jellyfin.sdk.model.api.MediaType
+import org.jellyfin.sdk.model.api.PlayMessage
 import timber.log.Timber
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -51,6 +53,7 @@ class RemoteSessionService
     constructor(
         private val api: ApiClient,
         private val serverRepository: ServerRepository,
+        private val remotePlayService: RemotePlayService,
         @param:DefaultCoroutineScope private val scope: CoroutineScope,
     ) {
         private val started = AtomicBoolean(false)
@@ -135,6 +138,17 @@ class RemoteSessionService
                                 "connecting"
                             }
                         Timber.i("RemoteSession: socket %s", text)
+                    }
+                }
+                launch {
+                    api.webSocket.subscribe<PlayMessage>().collect { message ->
+                        try {
+                            message.data?.let(remotePlayService::handle)
+                        } catch (ex: CancellationException) {
+                            throw ex
+                        } catch (ex: Exception) {
+                            Timber.i(ex, "RemoteSession: play command failed")
+                        }
                     }
                 }
             }
