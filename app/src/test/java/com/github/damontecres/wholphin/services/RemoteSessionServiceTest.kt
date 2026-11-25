@@ -12,7 +12,6 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.spyk
-import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +24,7 @@ import kotlinx.coroutines.test.runTest
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.sockets.SocketApi
 import org.jellyfin.sdk.api.sockets.SocketApiState
+import org.jellyfin.sdk.model.api.OutboundWebSocketMessage
 import org.jellyfin.sdk.model.api.PlayCommand
 import org.jellyfin.sdk.model.api.PlayMessage
 import org.jellyfin.sdk.model.api.PlayRequest
@@ -41,7 +41,7 @@ import kotlin.time.Duration.Companion.seconds
 class RemoteSessionServiceTest {
     private val testDispatcher = StandardTestDispatcher()
     private val socketState = MutableStateFlow<SocketApiState>(SocketApiState.Connected)
-    private val playMessages = MutableSharedFlow<PlayMessage>()
+    private val playMessages = MutableSharedFlow<OutboundWebSocketMessage>()
     private val current = MutableStateFlow<CurrentUser?>(null)
     private val remotePlay = mockk<RemotePlayService>(relaxed = true)
 
@@ -73,7 +73,7 @@ class RemoteSessionServiceTest {
     private fun TestScope.service(): RemoteSessionService {
         val socket = mockk<SocketApi>()
         every { socket.state } returns socketState
-        every { socket.subscribe(PlayMessage::class) } returns playMessages
+        every { socket.subscribeAll() } returns playMessages
         val api = mockk<ApiClient>(relaxed = true)
         every { api.webSocket } returns socket
         every { api.baseUrl } returns "http://localhost"
@@ -192,7 +192,7 @@ class RemoteSessionServiceTest {
             val request = playRequest()
             playMessages.emit(message(request))
             advanceTimeBy(1.seconds)
-            verify(exactly = 1) { remotePlay.handle(request) }
+            coVerify(exactly = 1) { remotePlay.process(request) }
         }
 
     @Test
@@ -204,12 +204,12 @@ class RemoteSessionServiceTest {
             advanceTimeBy(1.seconds)
             val bad = playRequest()
             val good = playRequest()
-            every { remotePlay.handle(bad) } throws IllegalStateException("boom")
+            coEvery { remotePlay.process(bad) } throws IllegalStateException("boom")
             playMessages.emit(message(null))
             playMessages.emit(message(bad))
             playMessages.emit(message(good))
             advanceTimeBy(1.seconds)
-            verify(exactly = 1) { remotePlay.handle(good) }
+            coVerify(exactly = 1) { remotePlay.process(good) }
             assertEquals(1, playMessages.subscriptionCount.value)
         }
 
