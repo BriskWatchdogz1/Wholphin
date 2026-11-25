@@ -29,14 +29,18 @@ import com.github.damontecres.wholphin.util.WholphinDispatchers
 import com.github.damontecres.wholphin.util.profile.Codec
 import com.github.damontecres.wholphin.util.profile.supportedAudioCodecs
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,6 +48,7 @@ import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.audioApi
 import org.jellyfin.sdk.api.client.extensions.instantMixApi
+import org.jellyfin.sdk.api.client.extensions.playlistApi
 import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
@@ -77,6 +82,7 @@ class MusicService
         private val serverRepository: ServerRepository,
         private val imageUrlService: ImageUrlService,
         private val userPreferencesService: UserPreferencesService,
+        private val dislikes: DislikeService,
     ) {
         private val _state = MutableStateFlow(MusicServiceState.EMPTY)
         val state: StateFlow<MusicServiceState> = _state
@@ -103,6 +109,7 @@ class MusicService
             private set
         private var reporter: MusicPlaybackReporter? = null
         private var websocketJob: Job? = null
+        private var dislikeJobs: List<Job> = emptyList()
 
         private suspend fun preferAc3Surround() =
             userPreferencesService
@@ -150,6 +157,7 @@ class MusicService
                                 }
                             }.also { r -> onMain { r.start() } }
                         websocketJob = subscribe()
+                        dislikeJobs = startDislikeJobs()
                     }
                 }
             }
@@ -173,6 +181,8 @@ class MusicService
                 onMain {
                     websocketJob?.cancel()
                     websocketJob = null
+                    dislikeJobs.forEach { it.cancel() }
+                    dislikeJobs = emptyList()
                     reporter?.release()
                     reporter = null
                     player.stop()
@@ -198,7 +208,9 @@ class MusicService
                             fields = DetailItemFields,
                         ).content.items
                         .map { BaseItem(it, false) }
-                setQueue(items, false)
+                // The server already filters the mix; the client filter is a cheap safety net
+                dislikes.refresh()
+                setQueue(items, false, EntryRule.FULL)
             }
 
         /**
@@ -210,14 +222,15 @@ class MusicService
             items: BlockingList<BaseItem?>,
             startIndex: Int,
             shuffled: Boolean,
+            rule: EntryRule = EntryRule.FULL,
         ) = withContext(WholphinDispatchers.IO) {
-            Timber.d("setQueue: %s items, startIndex=%s, shuffled=%s", items.size, startIndex, shuffled)
+            Timber.d("setQueue: %s items, startIndex=%s, shuffled=%s, rule=%s", items.size, startIndex, shuffled, rule)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(emptyList())
                 player.shuffleModeEnabled = shuffled
             }
             start()
-            addAllToQueue(items, startIndex)
+            addAllToQueue(items, startIndex, rule)
         }
 
         /**
@@ -226,13 +239,10 @@ class MusicService
         suspend fun setQueue(
             items: List<BaseItem>,
             shuffled: Boolean,
+            rule: EntryRule = EntryRule.FULL,
         ) {
-            Timber.d("setQueue: %s items, shuffled=%s", items.size, shuffled)
-            val preferAc3Surround = preferAc3Surround()
-            val mediaItems =
-                items
-                    .filter { it.type == BaseItemKind.AUDIO }
-                    .map { convert(it, preferAc3Surround) }
+            Timber.d("setQueue: %s items, shuffled=%s, rule=%s", items.size, shuffled, rule)
+            val mediaItems = convertSongs(items, rule)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(mediaItems)
                 player.shuffleModeEnabled = shuffled
@@ -250,11 +260,17 @@ class MusicService
             items: List<BaseItem>,
             startIndex: Int,
             startPositionMs: Long,
+            rule: EntryRule = EntryRule.FULL,
         ): List<Long> {
-            Timber.d("playQueue: %s items, startIndex=%s, positionMs=%s", items.size, startIndex, startPositionMs)
-            val mediaItems = convertSongs(items)
+            Timber.d("playQueue: %s items, startIndex=%s, positionMs=%s, rule=%s", items.size, startIndex, startPositionMs, rule)
+            dislikes.observe(items)
+            val (songs, start) = items.queueableWithStart(rule, dislikes.set.value, startIndex) { it.id }
+            // A start song that was left out takes its position with it
+            val position = if (songs.getOrNull(start)?.id == items.getOrNull(startIndex)?.id) startPositionMs else 0L
+            val mediaItems = convertSongs(songs, rule)
+            if (mediaItems.isEmpty()) return emptyList()
             withContext(WholphinDispatchers.Main) {
-                player.setMediaItems(mediaItems, startIndex, startPositionMs)
+                player.setMediaItems(mediaItems, start, position)
                 player.shuffleModeEnabled = false
                 updateQueueSize()
                 start()
@@ -270,9 +286,10 @@ class MusicService
         suspend fun insertIntoQueue(
             items: List<BaseItem>,
             index: Int?,
+            rule: EntryRule = EntryRule.FULL,
         ): List<Long> {
             Timber.d("insertIntoQueue: %s items, index=%s", items.size, index)
-            val mediaItems = convertSongs(items)
+            val mediaItems = convertSongs(items, rule)
             withContext(WholphinDispatchers.Main) {
                 if (index != null) {
                     player.addMediaItems(index, mediaItems)
@@ -294,8 +311,9 @@ class MusicService
             anchorKey: Long,
             before: Boolean,
             items: List<BaseItem>,
+            rule: EntryRule = EntryRule.FULL,
         ): List<Long>? {
-            val mediaItems = convertSongs(items)
+            val mediaItems = convertSongs(items, rule)
             return withContext(WholphinDispatchers.Main) {
                 val anchor =
                     (0 until player.mediaItemCount).firstOrNull {
@@ -321,12 +339,100 @@ class MusicService
                 } to player.currentMediaItemIndex
             }
 
-        private suspend fun convertSongs(items: List<BaseItem>): List<MediaItem> {
+        /**
+         * The songs of [items] that may be queued under [rule], as media items that carry the rule
+         */
+        private suspend fun convertSongs(
+            items: List<BaseItem>,
+            rule: EntryRule,
+        ): List<MediaItem> {
             val preferAc3Surround = preferAc3Surround()
-            return items
-                .filter { it.type == BaseItemKind.AUDIO }
-                .map { convert(it, preferAc3Surround) }
+            val songs = items.filter { it.type == BaseItemKind.AUDIO }
+            dislikes.observe(songs)
+            return songs
+                .queueable(rule, dislikes.set.value) { it.id }
+                .map { convert(it, preferAc3Surround, rule) }
         }
+
+        /**
+         * The rule for a queue that is started now, after fetching the disliked songs again
+         *
+         * @param explicitContainer an album or artist started on purpose
+         * @param singleSong a song started on its own
+         * @param listIds the ids of every song of the list to play, if known; a list of only excluded songs is exempt
+         */
+        suspend fun ruleFor(
+            explicitContainer: Boolean,
+            singleSong: Boolean,
+            listIds: List<UUID>? = null,
+        ): EntryRule {
+            if (singleSong) return EntryRule.EXEMPT
+            dislikes.refresh()
+            return ruleForStart(explicitContainer, false, listIds, dislikes.set.value)
+        }
+
+        /**
+         * The ids of all songs of a playlist in one request
+         */
+        suspend fun playlistSongIds(playlistId: UUID): List<UUID>? =
+            try {
+                api.playlistApi
+                    .getPlaylistItems(
+                        playlistId = playlistId,
+                        userId = serverRepository.currentUser?.id,
+                    ).content.items
+                    .map { it.id }
+            } catch (ex: CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                Timber.w(ex, "Error fetching the songs of playlist %s", playlistId)
+                null
+            }
+
+        /**
+         * Fetches the disliked songs every few minutes and removes upcoming queue entries that they now exclude
+         */
+        private fun startDislikeJobs(): List<Job> =
+            listOf(
+                defaultScope.launch {
+                    while (isActive) {
+                        dislikes.refresh()
+                        delay(DislikeService.REFRESH_INTERVAL_MS)
+                    }
+                },
+                defaultScope.launch {
+                    dislikes.set.collect { pruneQueue() }
+                },
+            )
+
+        /**
+         * Remove the upcoming entries that the disliked songs exclude, never the current entry or one before it
+         */
+        suspend fun pruneQueue() {
+            val removed =
+                onMain {
+                    val entries =
+                        List(player.mediaItemCount) {
+                            val audio = player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem
+                            QueueEntry(audio?.id ?: UUID(0, 0), audio?.rule ?: EntryRule.EXEMPT)
+                        }
+                    val stale = staleUpcoming(entries, player.currentMediaItemIndex, dislikes.set.value)
+                    stale.asReversed().forEach { player.removeMediaItem(it) }
+                    stale.size
+                }
+            if (removed > 0) {
+                Timber.i("MusicService: removed %d disliked songs from the queue", removed)
+                updateQueueSize()
+            }
+        }
+
+        /**
+         * Go on with the next song, or pause if the current one is the last
+         */
+        suspend fun skipCurrent() =
+            onMain {
+                if (player.hasNextMediaItem()) player.seekToNextMediaItem() else player.pause()
+            }
 
         private fun entryKey(item: MediaItem) = (item.localConfiguration?.tag as AudioItem).key
 
@@ -338,8 +444,8 @@ class MusicService
             index: Int? = null,
         ) {
             if (item.type == BaseItemKind.AUDIO) {
-                val preferAc3Surround = preferAc3Surround()
-                val mediaItem = convert(item, preferAc3Surround)
+                // A single song added on purpose plays even if disliked, like a song started on its own
+                val mediaItem = convertSongs(listOf(item), EntryRule.EXEMPT).firstOrNull() ?: return
                 withContext(WholphinDispatchers.Main) {
                     if (index != null) {
                         player.addMediaItem(index, mediaItem)
@@ -365,25 +471,25 @@ class MusicService
         suspend fun addAllToQueue(
             list: BlockingList<BaseItem?>,
             startIndex: Int,
+            rule: EntryRule = EntryRule.FULL,
         ) = loading {
-            val preferAc3Surround = preferAc3Surround()
             var remaining = startIndex
             list.indices
                 .chunked(25)
                 .forEach {
-                    val mediaItems =
+                    val songs =
                         it.mapNotNull {
                             if (remaining == 0) {
                                 list
                                     .getBlocking(it)
                                     ?.takeIf { it.type == BaseItemKind.AUDIO }
-                                    ?.let { convert(it, preferAc3Surround) }
                             } else {
                                 Timber.v("Skipping $remaining")
                                 remaining--
                                 null
                             }
                         }
+                    val mediaItems = convertSongs(songs, rule)
                     onMain { player.addMediaItems(mediaItems) }
                 }
             updateQueueSize()
@@ -396,6 +502,7 @@ class MusicService
         private fun convert(
             audio: BaseItem,
             preferAc3Surround: Boolean,
+            rule: EntryRule,
         ): MediaItem {
             val needsAc3Transcode =
                 preferAc3Surround &&
@@ -436,7 +543,7 @@ class MusicService
                 .Builder()
                 .setUri(url)
                 .setMediaId(audio.id.toServerString())
-                .setTag(AudioItem.from(audio, imageUrl))
+                .setTag(AudioItem.from(audio, imageUrl, rule))
                 .build()
         }
 
@@ -504,7 +611,8 @@ class MusicService
          * Play this item next after the current, ie add the item as the next index in the queue
          */
         suspend fun playNext(song: BaseItem) {
-            val mediaItem = convert(song, preferAc3Surround())
+            // A single song added on purpose plays even if disliked, like a song started on its own
+            val mediaItem = convertSongs(listOf(song), EntryRule.EXEMPT).firstOrNull() ?: return
             onMain {
                 player.addMediaItem(state.value.currentIndex + 1, mediaItem)
                 if (player.mediaItemCount == 1) {

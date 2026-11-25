@@ -60,6 +60,8 @@ fun NowPlayingButtons(
     onClickStop: () -> Unit,
     isFavorite: Boolean?,
     onClickFavorite: () -> Unit,
+    isDisliked: Boolean?,
+    onClickDislike: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val playPauseState = rememberPlayPauseButtonState(player)
@@ -134,6 +136,11 @@ fun NowPlayingButtons(
                 onClick = onClickFavorite,
                 onControllerInteraction = onControllerInteraction,
             )
+            DislikeButton(
+                isDisliked = isDisliked,
+                onClick = onClickDislike,
+                onControllerInteraction = onControllerInteraction,
+            )
             ShuffleButton(
                 active = shuffleState.shuffleOn,
                 enabled = shuffleState.isEnabled,
@@ -187,6 +194,50 @@ fun FavoriteButton(
             color =
                 when {
                     isFavorite == true -> Color.Red
+                    focused -> MaterialTheme.colorScheme.surface
+                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = .5f)
+                },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.CenterVertically),
+        )
+    }
+}
+
+@Composable
+fun DislikeButton(
+    isDisliked: Boolean?,
+    onClick: () -> Unit,
+    onControllerInteraction: () -> Unit,
+    modifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+) {
+    val selectedColor = MaterialTheme.colorScheme.border
+    val focused by interactionSource.collectIsFocusedAsState()
+    Button(
+        enabled = isDisliked != null,
+        onClick = onClick,
+        colors =
+            ClickableSurfaceDefaults.colors(
+                containerColor = AppColors.TransparentBlack25,
+                focusedContainerColor = selectedColor,
+            ),
+        contentPadding = PaddingValues(4.dp),
+        interactionSource = interactionSource,
+        modifier =
+            modifier
+                .size(36.dp, 36.dp)
+                .onFocusChanged { onControllerInteraction.invoke() },
+    ) {
+        Text(
+            text = stringResource(R.string.fa_thumbs_down),
+            fontSize = 18.sp,
+            fontFamily = FontAwesome,
+            textAlign = TextAlign.Center,
+            color =
+                when {
+                    isDisliked == true -> Color(0xFFFFA000)
                     focused -> MaterialTheme.colorScheme.surface
                     else -> MaterialTheme.colorScheme.onSurface.copy(alpha = .5f)
                 },
@@ -329,6 +380,9 @@ fun ShuffleButtonPreview() {
                 FavoriteButton(isFavorite = null, onClick = {}, onControllerInteraction = {})
                 FavoriteButton(isFavorite = false, onClick = {}, onControllerInteraction = {})
                 FavoriteButton(isFavorite = true, onClick = {}, onControllerInteraction = {})
+                DislikeButton(isDisliked = null, onClick = {}, onControllerInteraction = {})
+                DislikeButton(isDisliked = false, onClick = {}, onControllerInteraction = {})
+                DislikeButton(isDisliked = true, onClick = {}, onControllerInteraction = {})
             }
             Row {
                 RepeatButton(

@@ -76,6 +76,7 @@ fun NowPlayingOverlay(
     onClickMoreItem: (Int, AudioItem) -> Unit,
     onClickStop: () -> Unit,
     onClickFavorite: () -> Unit,
+    onClickDislike: () -> Unit,
     lyricsFocusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
@@ -144,6 +145,8 @@ fun NowPlayingOverlay(
                 onClickStop = onClickStop,
                 isFavorite = state.isFavorite,
                 onClickFavorite = onClickFavorite,
+                isDisliked = state.isDisliked,
+                onClickDislike = onClickDislike,
                 modifier =
                     Modifier
                         .fillMaxWidth()

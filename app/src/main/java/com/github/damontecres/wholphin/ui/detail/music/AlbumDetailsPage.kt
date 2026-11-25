@@ -49,6 +49,7 @@ import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.preferences.UserPreferences
 import com.github.damontecres.wholphin.services.BackdropService
+import com.github.damontecres.wholphin.services.EntryRule
 import com.github.damontecres.wholphin.services.ExtrasService
 import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
@@ -263,7 +264,7 @@ class AlbumViewModel
             startIndex: Int = 0,
         ) {
             val songs = state.value.songs as ApiRequestPager<*>
-            play(songs, startIndex, shuffled)
+            play(songs, startIndex, shuffled, EntryRule.ITEMS_ONLY)
         }
     }
 

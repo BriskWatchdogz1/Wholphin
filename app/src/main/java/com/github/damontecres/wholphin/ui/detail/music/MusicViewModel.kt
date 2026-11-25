@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.preferences.AppPreferences
+import com.github.damontecres.wholphin.services.EntryRule
 import com.github.damontecres.wholphin.services.MediaManagementService
 import com.github.damontecres.wholphin.services.MusicService
 import com.github.damontecres.wholphin.services.NavigationManager
@@ -32,9 +33,10 @@ abstract class MusicViewModel(
         pager: ApiRequestPager<*>,
         startIndex: Int = 0,
         shuffled: Boolean = false,
+        rule: EntryRule = EntryRule.FULL,
     ) {
         viewModelScope.launchIO {
-            musicService.setQueue(pager, startIndex, shuffled)
+            musicService.setQueue(pager, startIndex, shuffled, rule)
         }
     }
 
@@ -47,22 +49,24 @@ abstract class MusicViewModel(
             Timber.v("Playing %s %s", item.type, item.id)
             when (item.type) {
                 BaseItemKind.AUDIO -> {
-                    musicService.setQueue(listOf(item), shuffled)
+                    musicService.setQueue(listOf(item), shuffled, EntryRule.EXEMPT)
                 }
 
                 BaseItemKind.MUSIC_ALBUM -> {
                     val pager = getPagerForAlbum(api, item.id)
-                    musicService.setQueue(pager, startIndex, shuffled)
+                    musicService.setQueue(pager, startIndex, shuffled, musicService.ruleFor(true, false))
                 }
 
                 BaseItemKind.MUSIC_ARTIST -> {
                     val pager = getPagerForArtist(api, item.id)
-                    musicService.setQueue(pager, startIndex, shuffled)
+                    musicService.setQueue(pager, startIndex, shuffled, musicService.ruleFor(true, false))
                 }
 
                 BaseItemKind.PLAYLIST -> {
                     val pager = getPagerForPlaylist(api, item.id)
-                    musicService.setQueue(pager, startIndex, shuffled)
+                    // A playlist of only disliked songs (such as a playlist of dislikes) plays as it is
+                    val rule = musicService.ruleFor(false, false, musicService.playlistSongIds(item.id))
+                    musicService.setQueue(pager, startIndex, shuffled, rule)
                 }
 
                 else -> {

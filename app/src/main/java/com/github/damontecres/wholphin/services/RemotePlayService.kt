@@ -119,18 +119,44 @@ internal sealed interface WindowMatch {
  *
  * The window may have shifted by a song or two since the remote loaded it, so every offset is tried,
  * nearest to where the window currently sits first. Returns null if [ids] is anything else, such as a new album.
+ *
+ * Entries removed from the queue since the remote loaded its window (disliked songs are removed) are missing
+ * from [queue]. They are ignored, and an offset or index of the match then refers to the ids that are still
+ * queued (see [presentStartIndex]). With such gaps the window must still be the full report window or all that
+ * is left of the queue, so a list that merely overlaps the queue is not taken for a click.
  */
 internal fun matchQueueWindow(
     queue: List<UUID>,
     ids: List<UUID>,
     currentIndex: Int,
 ): WindowMatch? {
-    val length = ids.size
-    if (length < 2 || length != minOf(MAX_REPORTED_QUEUE, queue.size)) return null
+    val inQueue = queue.toHashSet()
+    val present = ids.filter { it in inQueue }
+    val length = present.size
+    val complete =
+        if (length == ids.size) {
+            length == minOf(MAX_REPORTED_QUEUE, queue.size)
+        } else {
+            ids.size == MAX_REPORTED_QUEUE || length == queue.size
+        }
+    if (length < 2 || !complete || length > queue.size) return null
     val preferred = currentIndex - REPORTED_BEFORE_CURRENT
     return (0..queue.size - length)
         .sortedBy { abs(it - preferred) }
-        .firstNotNullOfOrNull { matchWindowAt(queue, ids, it) }
+        .firstNotNullOfOrNull { matchWindowAt(queue, present, it) }
+}
+
+/**
+ * The index within the ids still queued for a command that starts at [startIndex] of [ids]: the number of ids
+ * in front of it that are still queued, so a start entry that was removed gives the next present one
+ */
+internal fun presentStartIndex(
+    queue: List<UUID>,
+    ids: List<UUID>,
+    startIndex: Int,
+): Int {
+    val inQueue = queue.toHashSet()
+    return ids.take(startIndex).count { it in inQueue }
 }
 
 private fun matchWindowAt(
@@ -249,12 +275,14 @@ class RemotePlayService
                 Timber.i("RemotePlay: nothing playable, ignored")
                 return
             }
+            val rule = musicService.ruleFor(false, ids.size == 1, ids)
             val keys =
                 musicService.insertIntoQueue(
                     batch.queue.items,
                     if (next) musicService.state.value.currentIndex + 1 else null,
+                    rule,
                 )
-            startLoader(ids.size, keys.size, chunks.drop(batch.chunkIndex + 1), emptyList(), keys.firstOrNull(), keys.lastOrNull())
+            startLoader(ids.size, keys.size, chunks.drop(batch.chunkIndex + 1), emptyList(), keys.firstOrNull(), keys.lastOrNull(), rule)
         }
 
         private suspend fun playNow(
@@ -279,9 +307,10 @@ class RemotePlayService
             }
             val queue = batch.queue
             cancelLoaders()
-            val keys = musicService.playQueue(queue.items, queue.startIndex, queue.startPositionMs)
+            val rule = musicService.ruleFor(false, ids.size == 1, ids)
+            val keys = musicService.playQueue(queue.items, queue.startIndex, queue.startPositionMs, rule)
             showNowPlaying()
-            startLoader(ids.size, keys.size, after, before, keys.firstOrNull(), keys.lastOrNull())
+            startLoader(ids.size, keys.size, after, before, keys.firstOrNull(), keys.lastOrNull(), rule)
         }
 
         private suspend fun showNowPlaying() =
@@ -309,7 +338,8 @@ class RemotePlayService
                     ?: return false
             when (match) {
                 is WindowMatch.Jump -> {
-                    val index = match.offset + (request.startIndex?.takeIf { it in ids.indices } ?: 0)
+                    val start = request.startIndex?.takeIf { it in ids.indices } ?: 0
+                    val index = match.offset + presentStartIndex(queue, ids, start)
                     Timber.i("RemotePlay: jump to %d", index)
                     musicService.playIndex(index)
                 }
@@ -356,6 +386,7 @@ class RemotePlayService
             before: List<List<UUID>>,
             firstKey: Long?,
             lastKey: Long?,
+            rule: EntryRule,
         ) {
             if (firstKey == null || lastKey == null || (after.isEmpty() && before.isEmpty())) {
                 Timber.i("RemotePlay: loaded %d songs from %d ids", firstCount, total)
@@ -370,7 +401,7 @@ class RemotePlayService
                         for (chunk in after) {
                             val songs = loadChunk(chunk).items
                             if (songs.isEmpty()) continue
-                            val keys = musicService.insertNextTo(last, false, songs)
+                            val keys = musicService.insertNextTo(last, false, songs, rule)
                             if (keys == null) {
                                 stopped = true
                                 break
@@ -382,7 +413,7 @@ class RemotePlayService
                             for (chunk in before) {
                                 val songs = loadChunk(chunk).items
                                 if (songs.isEmpty()) continue
-                                val keys = musicService.insertNextTo(firstKey, true, songs)
+                                val keys = musicService.insertNextTo(firstKey, true, songs, rule)
                                 if (keys == null) {
                                     stopped = true
                                     break

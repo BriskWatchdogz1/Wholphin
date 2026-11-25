@@ -17,6 +17,8 @@ data class NowPlayingState(
     val backdropResult: BackdropResult = BackdropResult.NONE,
     /** Whether the current song is a favorite, null while unknown */
     val isFavorite: Boolean? = null,
+    /** Whether the current song is disliked (rating `likes == false`), null while unknown */
+    val isDisliked: Boolean? = null,
 ) {
     val hasLyrics: Boolean get() = lyrics != null && lyrics.lyrics.isNotEmpty()
 }
@@ -31,6 +33,16 @@ internal fun NowPlayingState.withFavorite(
 ): NowPlayingState = if (currentMediaItem?.id == itemId) copy(isFavorite = isFavorite) else this
 
 /**
+ * Sets heart and thumb together from the user data the server answered with, only if [itemId] is still the
+ * current song. The two marks exclude each other on the server, so both are read from the same answer.
+ */
+internal fun NowPlayingState.withMarks(
+    itemId: UUID,
+    isFavorite: Boolean,
+    likes: Boolean?,
+): NowPlayingState = if (currentMediaItem?.id == itemId) copy(isFavorite = isFavorite, isDisliked = likes == false) else this
+
+/**
  * The state after the player moved to [audio]: lyrics and the favorite state are unknown until loaded
  */
 internal fun NowPlayingState.onSongChange(audio: AudioItem?): NowPlayingState =
@@ -39,4 +51,5 @@ internal fun NowPlayingState.onSongChange(audio: AudioItem?): NowPlayingState =
         lyrics = null,
         currentLyricIndex = null,
         isFavorite = null,
+        isDisliked = null,
     )

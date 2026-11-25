@@ -17,6 +17,7 @@ import com.github.damontecres.wholphin.preferences.AppPreferences
 import com.github.damontecres.wholphin.preferences.updateMusicPreferences
 import com.github.damontecres.wholphin.services.BackdropResult
 import com.github.damontecres.wholphin.services.BackdropService
+import com.github.damontecres.wholphin.services.DislikeService
 import com.github.damontecres.wholphin.services.ExtractedColors
 import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
@@ -74,6 +75,7 @@ class NowPlayingViewModel
         private val musicService: MusicService,
         private val backdropService: BackdropService,
         private val favoriteWatchManager: FavoriteWatchManager,
+        private val dislikes: DislikeService,
         private val imageUrlService: ImageUrlService,
         private val preferencesDataStore: DataStore<AppPreferences>,
         val navigationManager: NavigationManager,
@@ -111,7 +113,7 @@ class NowPlayingViewModel
                 it.copy(currentMediaItem = audio)
             }
             // The screen usually opens while a song plays, without a media item transition
-            loadFavorite(audio)
+            loadMarks(audio)
             player.addListener(this)
             addCloseable {
                 player.removeListener(this)
@@ -183,25 +185,22 @@ class NowPlayingViewModel
             val audio = mediaItem?.localConfiguration?.tag as? AudioItem
             Timber.v("onMediaItemTransition to %s", audio?.id)
             state.update { it.onSongChange(audio) }
-            loadFavorite(audio)
+            loadMarks(audio)
         }
 
         /**
-         * Load whether [audio] is a favorite; the answer only applies while it is still the current song
+         * Load whether [audio] is a favorite or disliked; the answer only applies while it is still the current song
          */
-        private fun loadFavorite(audio: AudioItem?) {
+        private fun loadMarks(audio: AudioItem?) {
             if (audio == null) return
             viewModelScope.launchIO {
                 try {
-                    val isFavorite =
-                        api.userDataApi
-                            .getItemUserData(audio.id)
-                            .content.isFavorite
-                    state.update { it.withFavorite(audio.id, isFavorite) }
+                    val data = api.userDataApi.getItemUserData(audio.id).content
+                    state.update { it.withMarks(audio.id, data.isFavorite, data.likes) }
                 } catch (ex: CancellationException) {
                     throw ex
                 } catch (ex: Exception) {
-                    Timber.w(ex, "Error fetching favorite state for %s", audio.id)
+                    Timber.w(ex, "Error fetching favorite and dislike state for %s", audio.id)
                 }
             }
         }
@@ -215,12 +214,45 @@ class NowPlayingViewModel
             val desired = !(current.isFavorite ?: false)
             viewModelScope.launchIO {
                 try {
-                    val isFavorite = favoriteWatchManager.setFavorite(itemId, desired).isFavorite
-                    state.update { it.withFavorite(itemId, isFavorite) }
+                    val data = favoriteWatchManager.setFavorite(itemId, desired)
+                    // The server removes a dislike when the favorite is set; both marks come from the answer
+                    state.update { it.withMarks(itemId, data.isFavorite, data.likes) }
+                    dislikes.refresh()
                 } catch (ex: CancellationException) {
                     throw ex
                 } catch (ex: Exception) {
                     Timber.w(ex, "Error setting favorite for %s", itemId)
+                }
+            }
+        }
+
+        /**
+         * Toggle the dislike of the current song and show the state the server answers with
+         *
+         * A new dislike enters the set of disliked songs at once and the player goes on with the next song.
+         */
+        fun toggleDislike() {
+            val current = state.value
+            val itemId = current.currentMediaItem?.id ?: return
+            val desired = !(current.isDisliked ?: false)
+            viewModelScope.launchIO {
+                try {
+                    val data =
+                        if (desired) {
+                            api.userDataApi.updateUserItemRating(itemId = itemId, likes = false).content
+                        } else {
+                            api.userDataApi.deleteUserItemRating(itemId = itemId).content
+                        }
+                    state.update { it.withMarks(itemId, data.isFavorite, data.likes) }
+                    dislikes.mark(itemId, desired)
+                    if (desired && state.value.currentMediaItem?.id == itemId) {
+                        musicService.skipCurrent()
+                    }
+                    dislikes.refresh()
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Timber.w(ex, "Error setting dislike for %s", itemId)
                 }
             }
         }

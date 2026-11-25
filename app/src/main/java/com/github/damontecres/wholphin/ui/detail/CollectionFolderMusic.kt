@@ -20,6 +20,7 @@ import com.github.damontecres.wholphin.data.model.GetItemsFilter
 import com.github.damontecres.wholphin.data.model.GetItemsFilterOverride
 import com.github.damontecres.wholphin.preferences.UserPreferences
 import com.github.damontecres.wholphin.services.BackdropService
+import com.github.damontecres.wholphin.services.EntryRule
 import com.github.damontecres.wholphin.services.MusicService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.ui.components.CollectionFolderView
@@ -66,7 +67,7 @@ class CollectionFolderMusicViewModel
         fun play(item: BaseItem) {
             if (item.type == BaseItemKind.AUDIO) {
                 viewModelScope.launchDefault {
-                    musicService.setQueue(listOf(item), false)
+                    musicService.setQueue(listOf(item), false, EntryRule.EXEMPT)
                 }
             }
         }
@@ -88,7 +89,7 @@ class CollectionFolderMusicViewModel
                         recursive = true,
                     )
                 val pager = ApiRequestPager(api, request, GetItemsRequestHandler, viewModelScope).init()
-                musicService.setQueue(pager, 0, shuffle)
+                musicService.setQueue(pager, 0, shuffle, musicService.ruleFor(false, false))
             }
         }
 
@@ -98,7 +99,7 @@ class CollectionFolderMusicViewModel
         ) {
             if (item.type == BaseItemKind.AUDIO) {
                 viewModelScope.launchDefault {
-                    musicService.setQueue(listOf(item), false)
+                    musicService.setQueue(listOf(item), false, EntryRule.EXEMPT)
                 }
             }
         }
