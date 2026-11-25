@@ -67,6 +67,7 @@ import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import timber.log.Timber
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
@@ -573,7 +574,10 @@ class MusicService
                                 .map { BaseItem(it, false) }
                         seed = candidate
                         got = fetched.size
-                        songs = filterInstantMix(fetched, candidate, taken, set, lastEntry.artistKey) { it.data.toLightSong() }
+                        val seedLibrary = libraryOf(candidate, candidate, userId)
+                        val libraries = fetched.associate { it.id to libraryOf(it.data.albumId ?: it.id, it.id, userId) }
+                        val sameLibrary = keepSeedLibrary(fetched, seedLibrary) { libraries[it.id] }
+                        songs = filterInstantMix(sameLibrary, candidate, taken, set, lastEntry.artistKey) { it.data.toLightSong() }
                         if (songs.isNotEmpty()) break
                     }
                 }
@@ -606,6 +610,34 @@ class MusicService
             val keys = if (songs.isEmpty()) emptyList() else insertNextTo(lastEntry.key, false, songs, EntryRule.FULL).orEmpty()
             Timber.i("Autoplay: source=%s seed=%s got=%d appended=%d", source::class.simpleName, seed, got, keys.size)
             if (keys.isNotEmpty()) trimPlayed()
+        }
+
+        /** Library (collection folder) per album or song, for the app's run */
+        private val libraryByKey = ConcurrentHashMap<UUID, UUID>()
+
+        /**
+         * The library that holds [itemId], looked up once per [key] (the album, so a mix costs one request per new
+         * album). Null when the server does not say.
+         */
+        private suspend fun libraryOf(
+            key: UUID,
+            itemId: UUID,
+            userId: UUID?,
+        ): UUID? {
+            libraryByKey[key]?.let { return it }
+            return try {
+                api.libraryApi
+                    .getAncestors(itemId = itemId, userId = userId)
+                    .content
+                    .firstOrNull { it.type == BaseItemKind.COLLECTION_FOLDER }
+                    ?.id
+                    ?.also { libraryByKey[key] = it }
+            } catch (ex: CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                Timber.w(ex, "Autoplay: no library for %s", itemId)
+                null
+            }
         }
 
         /**

@@ -81,6 +81,18 @@ internal fun shouldLoadMore(
 internal fun autoplaySeeds(queue: List<UUID>): List<UUID> = queue.takeLast(2).reversed().distinct()
 
 /**
+ * Keeps the songs of an Instant Mix that live in the same library as the seed
+ *
+ * The server mixes across all audio libraries, so a music seed can bring songs from another library such as spoken
+ * comedy. With an unknown [seedLibrary] everything stays; a song whose library is unknown is dropped.
+ */
+internal fun <T> keepSeedLibrary(
+    candidates: List<T>,
+    seedLibrary: UUID?,
+    libraryOf: (T) -> UUID?,
+): List<T> = if (seedLibrary == null) candidates else candidates.filter { libraryOf(it) == seedLibrary }
+
+/**
  * The part of an Instant Mix answer that is appended, in the order of the answer
  *
  * In this order: the [seedId] is removed; songs in [taken] (queue and played) are removed; excluded songs are removed
