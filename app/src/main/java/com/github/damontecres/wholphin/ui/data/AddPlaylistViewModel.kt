@@ -7,7 +7,9 @@ import androidx.lifecycle.viewModelScope
 import com.github.damontecres.wholphin.R
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.PlaylistCreator
+import com.github.damontecres.wholphin.services.ShuffleSource
 import com.github.damontecres.wholphin.ui.detail.PlaylistLoadingState
 import com.github.damontecres.wholphin.ui.detail.music.addToQueue
 import com.github.damontecres.wholphin.ui.launchDefault
@@ -34,6 +36,7 @@ class AddPlaylistViewModel
         private val api: ApiClient,
         private val playlistCreator: PlaylistCreator,
         private val musicService: MusicService,
+        private val shuffleService: MusicShuffleService,
     ) : ViewModel() {
         val playlistState = MutableStateFlow<PlaylistLoadingState>(PlaylistLoadingState.Pending)
 
@@ -76,6 +79,15 @@ class AddPlaylistViewModel
                 } else {
                     showToast(context, context.getString(R.string.success), Toast.LENGTH_SHORT)
                 }
+            }
+        }
+
+        /**
+         * Shuffle a music playlist in the app's smart order, like the shuffle button of its own page
+         */
+        fun shuffleMusicPlaylist(item: BaseItem) {
+            viewModelScope.launchIO {
+                shuffleService.shuffle(ShuffleSource.Playlist(item.id))
             }
         }
 

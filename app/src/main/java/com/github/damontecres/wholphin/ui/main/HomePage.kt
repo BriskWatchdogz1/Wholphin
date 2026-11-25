@@ -193,6 +193,7 @@ fun HomePage(
                                             overviewDialog = ItemDetailsDialogInfo(it)
                                         },
                                         onClearChosenStreams = {},
+                                        onClickShuffleMusic = playlistViewModel::shuffleMusicPlaylist,
                                         onClickRemoveFromNextUp = viewModel::removeFromNextUp,
                                     ),
                             )

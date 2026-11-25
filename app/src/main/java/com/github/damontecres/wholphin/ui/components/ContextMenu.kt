@@ -34,6 +34,7 @@ import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.MediaSourceInfo
 import org.jellyfin.sdk.model.api.MediaStreamType
+import org.jellyfin.sdk.model.api.MediaType
 import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import kotlin.time.Duration
 
@@ -95,6 +96,8 @@ data class ContextMenuActions(
     val onClickGoTo: (BaseItem) -> Unit = { navigateTo(it.destination()) },
     val onClickRemoveFromNextUp: (BaseItem) -> Unit = {},
     val onClickAddToQueue: (BaseItem) -> Unit = {},
+    /** Shuffle a music playlist; by default it goes through the video playlist path */
+    val onClickShuffleMusic: (BaseItem) -> Unit = { navigateTo(Destination.PlaybackList(itemId = it.id, shuffle = true)) },
     val onRemoveFromPlaylist: (Int, UUID) -> Unit = { _, _ -> },
 )
 
@@ -412,12 +415,16 @@ private fun buildContextMenuItems(
                     R.string.fa_shuffle,
                     dismissOnClick = true,
                 ) {
-                    actions.navigateTo(
-                        Destination.PlaybackList(
-                            itemId = item.id,
-                            shuffle = true,
-                        ),
-                    )
+                    if (item.type == BaseItemKind.PLAYLIST && item.data.mediaType == MediaType.AUDIO) {
+                        actions.onClickShuffleMusic(item)
+                    } else {
+                        actions.navigateTo(
+                            Destination.PlaybackList(
+                                itemId = item.id,
+                                shuffle = true,
+                            ),
+                        )
+                    }
                 },
             )
         }
