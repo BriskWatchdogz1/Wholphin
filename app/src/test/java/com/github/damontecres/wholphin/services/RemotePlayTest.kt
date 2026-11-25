@@ -317,7 +317,7 @@ class RemotePlayTest {
         musicState.value = MusicServiceState.EMPTY.copy(queueSize = 5, currentIndex = 2)
         val a1 = songs(1).single()
         runCommand(request(PlayCommand.PLAY_NEXT, a1)) {
-            coVerify { musicService.insertIntoQueue(listOf(a1), 3) }
+            coVerify { musicService.insertIntoQueue(listOf(a1), 3, EntryRule.EXEMPT) }
             coVerify(exactly = 0) { musicService.playQueue(any(), any(), any()) }
             assertEquals(1, navigationManager.backStack.size)
         }
@@ -483,5 +483,13 @@ class RemotePlayTest {
             coVerify(exactly = 1) { musicService.playQueue(album, 0, 0) }
             coVerify(exactly = 0) { musicService.playIndex(any()) }
         }
+    }
+
+    @Test
+    fun `a play next of one song is exempt and the rest keeps the full rule`() {
+        assertEquals(EntryRule.EXEMPT, ruleForRemoteInsert(PlayCommand.PLAY_NEXT, 1))
+        assertEquals(EntryRule.FULL, ruleForRemoteInsert(PlayCommand.PLAY_NEXT, 2))
+        assertEquals(EntryRule.FULL, ruleForRemoteInsert(PlayCommand.PLAY_LAST, 1))
+        assertEquals(EntryRule.FULL, ruleForRemoteInsert(PlayCommand.PLAY_LAST, 3))
     }
 }

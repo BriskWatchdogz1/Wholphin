@@ -115,6 +115,18 @@ class MusicReportSequencerTest {
     }
 
     @Test
+    fun `a stop after a queue replacement carries the new queue`() {
+        val s = MusicReportSequencer()
+        val q2 = ReportedQueue("playlistItem2", emptyList())
+        s.songChanged(song(a, 0))
+        s.positionBeforeChange(a, 30_000)
+        assertEquals(
+            listOf(MusicReport.Stop(a, 30_000, q2), MusicReport.Start(b, 0, false, q2)),
+            s.songChanged(song(b, 0, queue = q2)),
+        )
+    }
+
+    @Test
     fun `a queue change is reported once`() {
         val s = MusicReportSequencer()
         s.songChanged(song(a, 0))
