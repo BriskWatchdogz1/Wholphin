@@ -61,6 +61,8 @@ import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlaystateCommand
 import org.jellyfin.sdk.model.api.PlaystateMessage
 import org.jellyfin.sdk.model.api.QueueItem
+import org.jellyfin.sdk.model.api.UserDataChangeInfo
+import org.jellyfin.sdk.model.api.UserDataChangedMessage
 import org.jellyfin.sdk.model.extensions.ticks
 import org.jellyfin.sdk.model.serializer.toUUID
 import org.jellyfin.sdk.model.serializer.toUUIDOrNull
@@ -423,7 +425,43 @@ class MusicService
                 defaultScope.launch {
                     dislikes.set.collect { pruneQueue() }
                 },
+                api.webSocket
+                    .subscribe<UserDataChangedMessage>()
+                    .onEach { message -> message.data?.let { onUserDataChanged(it) } }
+                    .catch { ex -> Timber.e(ex, "Error in user data websocket subscription") }
+                    .launchIn(defaultScope),
             )
+
+        /**
+         * A rating or favorite changed on the server, maybe in another client: update the set at once and
+         * skip the current song if it is now disliked
+         */
+        private suspend fun onUserDataChanged(info: UserDataChangeInfo) {
+            if (info.userId != serverRepository.currentUser?.id) return
+            val changes = info.userDataList.map { RatingChange(it.itemId, it.likes) }
+            val marks = ratingMarks(changes, dislikes.set.value)
+            if (marks.isEmpty()) return
+            marks.forEach { (id, disliked) -> dislikes.mark(id, disliked) }
+            dislikes.refresh()
+            val current = onMain { player.currentMediaItem?.localConfiguration?.tag as? AudioItem }
+            val skip =
+                skipCurrentAfterRating(
+                    changes,
+                    current?.id,
+                    current?.rule ?: EntryRule.EXEMPT,
+                    dislikes.set.value,
+                    dislikes.recentOwnRatings(),
+                )
+            marks.forEach { (id, _) ->
+                Timber.i(
+                    "DislikeService: rating changed elsewhere for %s, likes=%s, skipped=%s",
+                    id,
+                    changes.firstOrNull { it.itemId == id }?.likes,
+                    skip && id == current?.id,
+                )
+            }
+            if (skip) skipCurrent()
+        }
 
         /**
          * Remove the upcoming entries that the disliked songs exclude, never the current entry or one before it

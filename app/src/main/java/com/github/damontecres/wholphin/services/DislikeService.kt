@@ -112,6 +112,23 @@ class DislikeService
             _set.value = if (disliked) _set.value + id else _set.value - id
         }
 
+        // Songs the app is rating itself, noted before the request: the server's message can beat the answer
+        private val ownRatings = HashMap<UUID, Long>()
+
+        /** Note that the app is about to rate [id]; the echo of that change from the server must not skip again */
+        fun noteOwnRating(id: UUID) {
+            synchronized(ownRatings) { ownRatings[id] = System.currentTimeMillis() }
+        }
+
+        /** Songs the app rated itself within [OWN_RATING_MS] */
+        fun recentOwnRatings(): Set<UUID> {
+            val limit = System.currentTimeMillis() - OWN_RATING_MS
+            return synchronized(ownRatings) {
+                ownRatings.entries.removeAll { it.value < limit }
+                ownRatings.keys.toSet()
+            }
+        }
+
         private fun recentMarks(): Map<UUID, Boolean> {
             val limit = System.currentTimeMillis() - MARK_KEEP_MS
             return synchronized(marks) {
@@ -123,6 +140,9 @@ class DislikeService
         companion object {
             /** The server caches its snapshot for 300 s, local marks stay at least that long */
             const val MARK_KEEP_MS = 5 * 60 * 1000L + 30_000L
+
+            /** How long the echo of the app's own rating is ignored */
+            const val OWN_RATING_MS = 15_000L
 
             /** How often the set is fetched while music plays */
             const val REFRESH_INTERVAL_MS = 5 * 60 * 1000L

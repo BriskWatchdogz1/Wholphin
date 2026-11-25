@@ -43,10 +43,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
@@ -55,9 +58,11 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.api.client.extensions.lyricApi
 import org.jellyfin.sdk.api.client.extensions.userDataApi
+import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.LyricDto
+import org.jellyfin.sdk.model.api.UserDataChangedMessage
 import org.jellyfin.sdk.model.api.request.GetItemsRequest
 import org.jellyfin.sdk.model.extensions.ticks
 import timber.log.Timber
@@ -146,6 +151,23 @@ class NowPlayingViewModel
             viewModelScope.launchDefault { backdropService.clearBackdrop() }
             listenForBackdrop()
             listenForLyrics()
+            listenForMarks()
+        }
+
+        /**
+         * Show a favorite or rating that another client set for the current song
+         */
+        private fun listenForMarks() {
+            api.webSocket
+                .subscribe<UserDataChangedMessage>()
+                .onEach { message ->
+                    val itemId = state.value.currentMediaItem?.id ?: return@onEach
+                    message.data
+                        ?.userDataList
+                        ?.firstOrNull { it.itemId == itemId }
+                        ?.let { data -> state.update { it.withMarks(itemId, data.isFavorite, data.likes) } }
+                }.catch { ex -> Timber.e(ex, "Error in user data websocket subscription") }
+                .launchIn(viewModelScope)
         }
 
         fun reportInteraction() {
@@ -244,6 +266,7 @@ class NowPlayingViewModel
             val current = state.value
             val itemId = current.currentMediaItem?.id ?: return
             val desired = !(current.isDisliked ?: false)
+            dislikes.noteOwnRating(itemId)
             viewModelScope.launchIO {
                 try {
                     val data =

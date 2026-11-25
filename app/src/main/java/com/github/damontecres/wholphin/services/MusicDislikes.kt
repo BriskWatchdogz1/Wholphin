@@ -143,3 +143,46 @@ internal fun staleUpcoming(
     currentIndex: Int,
     set: DislikeSet,
 ): List<Int> = entries.indices.filter { it > currentIndex && set.isExcluded(entries[it].id, entries[it].rule) }
+
+/** One rating entry of a user-data message: [likes] is true, false or null (no rating) */
+internal data class RatingChange(
+    val itemId: UUID,
+    val likes: Boolean?,
+)
+
+/**
+ * What a rating change from elsewhere tells the app about the set: a dislike puts the song in, any other
+ * rating of a song that the set holds as disliked takes it out. Needed because the server answers the
+ * list of disliked songs from a snapshot that can be minutes old.
+ */
+internal fun ratingMarks(
+    changes: List<RatingChange>,
+    set: DislikeSet,
+): Map<UUID, Boolean> =
+    changes
+        .mapNotNull { change ->
+            when {
+                change.likes == false -> change.itemId to true
+                change.itemId in set.itemIds -> change.itemId to false
+                else -> null
+            }
+        }.toMap()
+
+/**
+ * Whether the current entry is skipped after a rating changed elsewhere
+ *
+ * Only when the message holds a dislike, the entry is not exempt, the refreshed [set] excludes it under its
+ * [currentRule] and the app did not rate it itself a moment ago ([ownRated]: the thumb-down skips on its own).
+ */
+internal fun skipCurrentAfterRating(
+    changes: List<RatingChange>,
+    currentId: UUID?,
+    currentRule: EntryRule,
+    set: DislikeSet,
+    ownRated: Set<UUID>,
+): Boolean =
+    currentId != null &&
+        currentRule != EntryRule.EXEMPT &&
+        currentId !in ownRated &&
+        changes.any { it.likes == false } &&
+        set.isExcluded(currentId, currentRule)
