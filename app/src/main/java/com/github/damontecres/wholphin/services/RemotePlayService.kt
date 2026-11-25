@@ -18,6 +18,7 @@ import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.PlayCommand
 import org.jellyfin.sdk.model.api.PlayRequest
+import org.jellyfin.sdk.model.api.PlaystateRequest
 import timber.log.Timber
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -206,19 +207,30 @@ class RemotePlayService
         private val loaders = CopyOnWriteArrayList<Job>()
 
         /**
-         * Handle the command in the application scope, one command at a time
+         * Handle the command, one at a time, and return when its first step is done (the jump, the insertion
+         * or the first chunk of a replacement). The caller handles the next message of the socket only then,
+         * so commands take effect in arrival order. Loading the rest of a large command goes on in the background.
          */
-        fun handle(request: PlayRequest) {
-            scope.launch {
-                mutex.withLock {
-                    try {
-                        execute(request)
-                    } catch (ex: CancellationException) {
-                        throw ex
-                    } catch (ex: Exception) {
-                        Timber.e(ex, "RemotePlay: failed to handle %s", request.playCommand)
-                    }
+        suspend fun process(request: PlayRequest) {
+            mutex.withLock {
+                try {
+                    execute(request)
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Timber.e(ex, "RemotePlay: failed to handle %s", request.playCommand)
                 }
+            }
+        }
+
+        /** A playback command (next track, pause, ...) for the running music, handled in the same order as play commands */
+        suspend fun processPlaystate(request: PlaystateRequest) {
+            try {
+                musicService.handlePlaystate(request)
+            } catch (ex: CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                Timber.e(ex, "RemotePlay: failed to handle playstate %s", request.command)
             }
         }
 
@@ -391,6 +403,13 @@ class RemotePlayService
             val match =
                 withContext(WholphinDispatchers.Default) { matchQueueWindow(queue, ids, current) }
                     ?: return false
+            Timber.i(
+                "RemotePlay: command=%s ids=%d startIndex=%s window=%s",
+                request.playCommand,
+                ids.size,
+                request.startIndex,
+                if (match is WindowMatch.Jump) "jump" else "move",
+            )
             when (match) {
                 is WindowMatch.Jump -> {
                     val start = request.startIndex?.takeIf { it in ids.indices } ?: 0

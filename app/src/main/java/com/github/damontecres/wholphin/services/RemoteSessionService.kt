@@ -15,10 +15,11 @@ import kotlinx.coroutines.launch
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.sessionApi
 import org.jellyfin.sdk.api.sockets.SocketApiState
-import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.GeneralCommandType
 import org.jellyfin.sdk.model.api.MediaType
+import org.jellyfin.sdk.model.api.OutboundWebSocketMessage
 import org.jellyfin.sdk.model.api.PlayMessage
+import org.jellyfin.sdk.model.api.PlaystateMessage
 import timber.log.Timber
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -141,16 +142,31 @@ class RemoteSessionService
                     }
                 }
                 launch {
-                    api.webSocket.subscribe<PlayMessage>().collect { message ->
-                        try {
-                            message.data?.let(remotePlayService::handle)
-                        } catch (ex: CancellationException) {
-                            throw ex
-                        } catch (ex: Exception) {
-                            Timber.i(ex, "RemoteSession: play command failed")
-                        }
-                    }
+                    // One collector for both kinds: the server writes a play next and the next track that follows
+                    // it in this order, and two collectors would not keep it
+                    api.webSocket.subscribeAll().collect { dispatch(it) }
                 }
+            }
+        }
+
+        /** Handles one socket message and returns when its first step is done; others are ignored */
+        internal suspend fun dispatch(message: OutboundWebSocketMessage) {
+            try {
+                when (message) {
+                    is PlayMessage -> {
+                        message.data?.let { remotePlayService.process(it) }
+                    }
+
+                    is PlaystateMessage -> {
+                        message.data?.let { remotePlayService.processPlaystate(it) }
+                    }
+
+                    else -> {}
+                }
+            } catch (ex: CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                Timber.i(ex, "RemoteSession: remote command failed")
             }
         }
     }

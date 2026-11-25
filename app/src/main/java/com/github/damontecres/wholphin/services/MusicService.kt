@@ -59,7 +59,7 @@ import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlaystateCommand
-import org.jellyfin.sdk.model.api.PlaystateMessage
+import org.jellyfin.sdk.model.api.PlaystateRequest
 import org.jellyfin.sdk.model.api.QueueItem
 import org.jellyfin.sdk.model.api.UserDataChangeInfo
 import org.jellyfin.sdk.model.api.UserDataChangedMessage
@@ -119,7 +119,9 @@ class MusicService
         var mediaSession: MediaSession? = null
             private set
         private var reporter: MusicPlaybackReporter? = null
-        private var websocketJob: Job? = null
+
+        @Volatile
+        private var playstateActive = false
         private var dislikeJobs: List<Job> = emptyList()
         private var autoplayJob: Job? = null
         private val autoplayMutex = Mutex()
@@ -170,7 +172,7 @@ class MusicService
                                     )
                                 }
                             }.also { r -> onMain { r.start() } }
-                        websocketJob = subscribe()
+                        playstateActive = true
                         dislikeJobs = startDislikeJobs()
                         autoplayJob = startAutoplayJob()
                     }
@@ -194,8 +196,7 @@ class MusicService
                 mediaSession?.release()
                 mediaSession = null
                 onMain {
-                    websocketJob?.cancel()
-                    websocketJob = null
+                    playstateActive = false
                     dislikeJobs.forEach { it.cancel() }
                     dislikeJobs = emptyList()
                     autoplayJob?.cancel()
@@ -895,60 +896,58 @@ class MusicService
         }
 
         /**
-         * Subscribes to the server websocket to receive playback commands
+         * Handles a playback command (pause, next track, ...) that the server sent to this session
+         *
+         * Called in arrival order by [RemoteSessionService], together with the play commands. Ignored while no
+         * music runs, so a command meant for video is not handled twice.
          */
-        private fun subscribe(): Job =
-            api.webSocket
-                .subscribe<PlaystateMessage>()
-                .onEach { message ->
-                    message.data?.let {
-                        withContext(WholphinDispatchers.Main) {
-                            when (it.command) {
-                                PlaystateCommand.STOP -> {
-                                    stop()
-                                }
-
-                                PlaystateCommand.PAUSE -> {
-                                    player.pause()
-                                }
-
-                                PlaystateCommand.UNPAUSE -> {
-                                    player.play()
-                                }
-
-                                PlaystateCommand.NEXT_TRACK -> {
-                                    player.seekToNext()
-                                }
-
-                                PlaystateCommand.PREVIOUS_TRACK -> {
-                                    player.seekToPrevious()
-                                }
-
-                                PlaystateCommand.SEEK -> {
-                                    it.seekPositionTicks?.ticks?.let {
-                                        player.seekTo(
-                                            it.inWholeMilliseconds,
-                                        )
-                                    }
-                                }
-
-                                PlaystateCommand.REWIND -> {
-                                    player.seekBack(10.seconds)
-                                }
-
-                                PlaystateCommand.FAST_FORWARD -> {
-                                    player.seekForward(30.seconds)
-                                }
-
-                                PlaystateCommand.PLAY_PAUSE -> {
-                                    if (player.isPlaying) player.pause() else player.play()
-                                }
-                            }
-                        }
+        suspend fun handlePlaystate(request: PlaystateRequest) {
+            if (!playstateActive) return
+            Timber.i(
+                "MusicDiag: PlaystateMessage command=%s seekPositionMs=%s",
+                request.command,
+                request.seekPositionTicks?.ticks?.inWholeMilliseconds,
+            )
+            withContext(WholphinDispatchers.Main) {
+                when (request.command) {
+                    PlaystateCommand.STOP -> {
+                        stop()
                     }
-                }.catch { ex ->
-                    Timber.e(ex, "Error in websocket subscription")
-                }.launchIn(defaultScope)
+
+                    PlaystateCommand.PAUSE -> {
+                        player.pause()
+                    }
+
+                    PlaystateCommand.UNPAUSE -> {
+                        player.play()
+                    }
+
+                    PlaystateCommand.NEXT_TRACK -> {
+                        player.seekToNext()
+                    }
+
+                    PlaystateCommand.PREVIOUS_TRACK -> {
+                        player.seekToPrevious()
+                    }
+
+                    PlaystateCommand.SEEK -> {
+                        request.seekPositionTicks?.ticks?.let { player.seekTo(it.inWholeMilliseconds) }
+                    }
+
+                    PlaystateCommand.REWIND -> {
+                        player.seekBack(10.seconds)
+                    }
+
+                    PlaystateCommand.FAST_FORWARD -> {
+                        player.seekForward(30.seconds)
+                    }
+
+                    PlaystateCommand.PLAY_PAUSE -> {
+                        if (player.isPlaying) player.pause() else player.play()
+                    }
+                }
+            }
+        }
     }
 
 @Stable
