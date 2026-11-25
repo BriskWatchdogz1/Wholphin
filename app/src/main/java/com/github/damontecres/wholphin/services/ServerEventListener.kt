@@ -23,11 +23,9 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import org.jellyfin.sdk.api.client.ApiClient
-import org.jellyfin.sdk.api.client.extensions.sessionApi
 import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.GeneralCommandMessage
 import org.jellyfin.sdk.model.api.GeneralCommandType
-import org.jellyfin.sdk.model.api.MediaType
 import org.jellyfin.sdk.model.api.PlayMessage
 import org.jellyfin.sdk.model.api.UserUpdatedMessage
 import timber.log.Timber
@@ -44,12 +42,14 @@ class ServerEventListener
         private val api: ApiClient,
         private val serverRepository: ServerRepository,
         private val remotePlayService: RemotePlayService,
+        private val remoteSession: RemoteSessionService,
     ) : DefaultLifecycleObserver {
         private val activity = (context as AppCompatActivity)
 
         private var listenJob: Job? = null
 
         init {
+            remoteSession.start()
             activity.lifecycle.addObserver(this)
             serverRepository.current.collectLatestIn(activity.lifecycleScope) {
                 Timber.d("New user/server: %s", it)
@@ -66,15 +66,7 @@ class ServerEventListener
         ) {
             if (server != null && user != null && api.baseUrl != null && api.accessToken != null) {
                 (context as AppCompatActivity).lifecycleScope.launchIO {
-                    api.sessionApi.postCapabilities(
-                        playableMediaTypes = listOf(MediaType.VIDEO, MediaType.AUDIO),
-                        supportedCommands =
-                            listOf(
-                                GeneralCommandType.DISPLAY_MESSAGE,
-                                GeneralCommandType.SEND_STRING,
-                            ),
-                        supportsMediaControl = true,
-                    )
+                    remoteSession.postCapabilities()
                     subscribeToWebSocket()
                 }
             }
