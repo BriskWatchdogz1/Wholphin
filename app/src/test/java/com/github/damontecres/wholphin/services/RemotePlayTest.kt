@@ -44,6 +44,7 @@ class RemotePlayTest {
     fun setUp() {
         WholphinDispatchers.configure(testDispatcher)
         every { musicService.state } returns musicState
+        coEvery { musicService.ruleFor(any(), any(), any()) } returns EntryRule.FULL
         coEvery { musicService.playQueue(any(), any(), any()) } answers { newKeys(firstArg<List<BaseItem>>().size) }
         coEvery { musicService.insertIntoQueue(any(), any()) } answers { newKeys(firstArg<List<BaseItem>>().size) }
         coEvery { musicService.insertNextTo(any(), any(), any()) } answers {
