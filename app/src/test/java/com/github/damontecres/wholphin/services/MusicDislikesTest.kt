@@ -177,3 +177,59 @@ class MusicDislikesTest {
         assertEquals(emptyList<Int>(), staleUpcoming(emptyList(), 0, set))
     }
 }
+
+class RatingChangeTest {
+    private val a = UUID(0, 1)
+    private val b = UUID(0, 2)
+    private val c = UUID(0, 3)
+    private val set = DislikeSet(itemIds = setOf(a), excludedIds = setOf(a, b))
+
+    @Test
+    fun `a dislike becomes a mark and a taken back dislike removes the song`() {
+        val marks = ratingMarks(listOf(RatingChange(b, false), RatingChange(a, null), RatingChange(c, true)), set)
+        assertEquals(mapOf(b to true, a to false), marks)
+    }
+
+    @Test
+    fun `a rating of a song the set does not hold gives no mark`() {
+        assertTrue(ratingMarks(listOf(RatingChange(c, true), RatingChange(c, null)), set).isEmpty())
+    }
+
+    private fun skip(
+        changes: List<RatingChange>,
+        current: UUID?,
+        rule: EntryRule,
+        refreshed: DislikeSet,
+        own: Set<UUID> = emptySet(),
+    ) = skipCurrentAfterRating(changes, current, rule, refreshed, own)
+
+    @Test
+    fun `current song disliked elsewhere is skipped`() {
+        assertTrue(skip(listOf(RatingChange(a, false)), a, EntryRule.FULL, set))
+        assertTrue(skip(listOf(RatingChange(a, false)), a, EntryRule.ITEMS_ONLY, set))
+    }
+
+    @Test
+    fun `exempt current song is never skipped`() {
+        assertFalse(skip(listOf(RatingChange(a, false)), a, EntryRule.EXEMPT, set))
+    }
+
+    @Test
+    fun `the echo of the app's own rating does not skip again`() {
+        assertFalse(skip(listOf(RatingChange(a, false)), a, EntryRule.FULL, set, own = setOf(a)))
+    }
+
+    @Test
+    fun `message without a dislike does not skip`() {
+        assertFalse(skip(listOf(RatingChange(a, true)), a, EntryRule.FULL, set))
+        assertFalse(skip(listOf(RatingChange(c, null)), c, EntryRule.FULL, set))
+    }
+
+    @Test
+    fun `current song that the set does not exclude stays`() {
+        assertFalse(skip(listOf(RatingChange(a, false)), c, EntryRule.FULL, set))
+        assertFalse(skip(listOf(RatingChange(a, false)), null, EntryRule.FULL, set))
+        // disliked album excludes b under full but not under items-only
+        assertFalse(skip(listOf(RatingChange(c, false)), b, EntryRule.ITEMS_ONLY, set))
+    }
+}
