@@ -190,6 +190,7 @@ class RemotePlayService
         private val musicService: MusicService,
         private val navigationManager: NavigationManager,
         @param:DefaultCoroutineScope private val scope: CoroutineScope,
+        private val loadState: QueueLoadState = QueueLoadState(),
     ) {
         private val mutex = Mutex()
         private val loaders = CopyOnWriteArrayList<Job>()
@@ -251,6 +252,16 @@ class RemotePlayService
         }
 
         internal suspend fun execute(request: PlayRequest) {
+            // Autoplay waits from the first chunk on, not only while the background job runs
+            loadState.begin()
+            try {
+                executeCommand(request)
+            } finally {
+                loadState.end()
+            }
+        }
+
+        private suspend fun executeCommand(request: PlayRequest) {
             val ids = request.itemIds.orEmpty()
             val command = request.playCommand
             val queueSize = musicService.state.value.queueSize
@@ -321,11 +332,23 @@ class RemotePlayService
             ids: List<UUID>,
             rule: EntryRule,
         ) = mutex.withLock {
+            loadState.begin()
+            try {
+                playIdsLocked(ids, rule)
+            } finally {
+                loadState.end()
+            }
+        }
+
+        private suspend fun playIdsLocked(
+            ids: List<UUID>,
+            rule: EntryRule,
+        ) {
             val chunks = planRemoteLoad(ids, 0).fromStart
             val batch = firstBatch(chunks, 0, null)
             if (batch == null) {
                 Timber.i("RemotePlay: nothing playable in %d ids, ignored", ids.size)
-                return@withLock
+                return
             }
             cancelLoaders()
             val keys = musicService.playQueue(batch.queue.items, 0, 0, rule)
@@ -452,6 +475,10 @@ class RemotePlayService
                     }
                 }
             loaders.add(job)
-            job.invokeOnCompletion { loaders.remove(job) }
+            loadState.begin()
+            job.invokeOnCompletion {
+                loaders.remove(job)
+                loadState.end()
+            }
         }
     }

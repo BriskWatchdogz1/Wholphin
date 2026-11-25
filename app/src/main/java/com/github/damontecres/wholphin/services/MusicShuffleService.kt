@@ -111,7 +111,7 @@ class MusicShuffleService
             }
 
         private suspend fun shuffleLibrary(source: ShuffleSource.Library) {
-            // One request for the sample, no paging; reloading when the queue runs low is a later part
+            // One request for the sample, no paging; autoplay loads the next random batch when the queue runs low
             val items =
                 api.libraryApi
                     .getItems(
@@ -126,7 +126,7 @@ class MusicShuffleService
             val rule = musicService.ruleFor(false, false)
             val ordered = smartOrder(items, rule, dislikes.set.value, Instant.now(), Random.Default) { it.data.toLightSong() }
             Timber.i("MusicShuffle: library sample, %d of %d songs", ordered.size, items.size)
-            if (ordered.isNotEmpty()) musicService.playQueue(ordered, 0, 0, rule)
+            if (ordered.isNotEmpty()) musicService.playQueue(ordered, 0, 0, rule, AutoplaySource.LibraryRandom(source.id))
         }
 
         /**

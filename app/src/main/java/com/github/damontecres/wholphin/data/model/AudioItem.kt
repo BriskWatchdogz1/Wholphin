@@ -2,6 +2,7 @@ package com.github.damontecres.wholphin.data.model
 
 import androidx.compose.runtime.Stable
 import com.github.damontecres.wholphin.services.EntryRule
+import com.github.damontecres.wholphin.services.artistKeyOf
 import org.jellyfin.sdk.model.extensions.ticks
 import java.util.UUID
 import kotlin.time.Duration
@@ -28,6 +29,8 @@ data class AudioItem(
     val hasLyrics: Boolean,
     /** How this entry is judged against the disliked songs, set when it is queued */
     val rule: EntryRule = EntryRule.FULL,
+    /** The artist as the smart shuffle and autoplay compare it, see [artistKeyOf] */
+    val artistKey: String? = null,
 ) {
     companion object {
         private var keyTracker = 0L
@@ -51,6 +54,7 @@ data class AudioItem(
                 imageUrl = imageUrl,
                 hasLyrics = item.data.hasLyrics == true,
                 rule = rule,
+                artistKey = artistKeyOf(item.data),
             )
     }
 }

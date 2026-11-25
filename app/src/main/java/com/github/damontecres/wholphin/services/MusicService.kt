@@ -36,7 +36,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -48,10 +51,12 @@ import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.audioApi
 import org.jellyfin.sdk.api.client.extensions.instantMixApi
+import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.api.client.extensions.playlistApi
 import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
+import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlaystateCommand
 import org.jellyfin.sdk.model.api.PlaystateMessage
@@ -60,9 +65,11 @@ import org.jellyfin.sdk.model.extensions.ticks
 import org.jellyfin.sdk.model.serializer.toUUID
 import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import timber.log.Timber
+import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -83,6 +90,7 @@ class MusicService
         private val imageUrlService: ImageUrlService,
         private val userPreferencesService: UserPreferencesService,
         private val dislikes: DislikeService,
+        private val queueLoads: QueueLoadState,
     ) {
         private val _state = MutableStateFlow(MusicServiceState.EMPTY)
         val state: StateFlow<MusicServiceState> = _state
@@ -110,6 +118,9 @@ class MusicService
         private var reporter: MusicPlaybackReporter? = null
         private var websocketJob: Job? = null
         private var dislikeJobs: List<Job> = emptyList()
+        private var autoplayJob: Job? = null
+        private val autoplayMutex = Mutex()
+        private val autoplaySession = AutoplaySession()
 
         private suspend fun preferAc3Surround() =
             userPreferencesService
@@ -158,6 +169,7 @@ class MusicService
                             }.also { r -> onMain { r.start() } }
                         websocketJob = subscribe()
                         dislikeJobs = startDislikeJobs()
+                        autoplayJob = startAutoplayJob()
                     }
                 }
             }
@@ -183,6 +195,9 @@ class MusicService
                     websocketJob = null
                     dislikeJobs.forEach { it.cancel() }
                     dislikeJobs = emptyList()
+                    autoplayJob?.cancel()
+                    autoplayJob = null
+                    autoplaySession.clear()
                     reporter?.release()
                     reporter = null
                     player.stop()
@@ -224,6 +239,7 @@ class MusicService
             rule: EntryRule = EntryRule.FULL,
         ) = withContext(WholphinDispatchers.IO) {
             Timber.d("setQueue: %s items, startIndex=%s, rule=%s", items.size, startIndex, rule)
+            autoplaySession.queueStarted()
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(emptyList())
                 player.shuffleModeEnabled = false
@@ -240,6 +256,7 @@ class MusicService
             rule: EntryRule = EntryRule.FULL,
         ) {
             Timber.d("setQueue: %s items, rule=%s", items.size, rule)
+            autoplaySession.queueStarted()
             val mediaItems = convertSongs(items, rule)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(mediaItems)
@@ -252,6 +269,8 @@ class MusicService
         /**
          * Replace the queue with the given songs and start playing at [startIndex] and [startPositionMs]
          *
+         * [autoplaySource] is where autoplay takes more songs from; any other queue start means Instant Mix.
+         *
          * @return the [AudioItem.key] of each queue entry created, in order
          */
         suspend fun playQueue(
@@ -259,6 +278,7 @@ class MusicService
             startIndex: Int,
             startPositionMs: Long,
             rule: EntryRule = EntryRule.FULL,
+            autoplaySource: AutoplaySource = AutoplaySource.InstantMix,
         ): List<Long> {
             Timber.d("playQueue: %s items, startIndex=%s, positionMs=%s, rule=%s", items.size, startIndex, startPositionMs, rule)
             dislikes.observe(items)
@@ -267,6 +287,7 @@ class MusicService
             val position = if (songs.getOrNull(start)?.id == items.getOrNull(startIndex)?.id) startPositionMs else 0L
             val mediaItems = convertSongs(songs, rule)
             if (mediaItems.isEmpty()) return emptyList()
+            autoplaySession.queueStarted(autoplaySource)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(mediaItems, start, position)
                 player.shuffleModeEnabled = false
@@ -455,11 +476,150 @@ class MusicService
 
         /**
          * Go on with the next song, or pause if the current one is the last
+         *
+         * With autoplay on and nothing following, it waits for a load first.
          */
-        suspend fun skipCurrent() =
+        suspend fun skipCurrent() {
+            if (!onMain { player.hasNextMediaItem() } && autoplayEnabled()) {
+                autoplayMutex.withLock { if (!onMain { player.hasNextMediaItem() }) loadMore() }
+            }
             onMain {
                 if (player.hasNextMediaItem()) player.seekToNextMediaItem() else player.pause()
             }
+        }
+
+        private suspend fun autoplayEnabled() =
+            userPreferencesService
+                .getCurrent()
+                .appPreferences.musicPreferences.autoplay
+
+        private data class AutoplayTrigger(
+            val index: Int,
+            val version: Long,
+            val size: Int,
+            val pagerLoading: Boolean,
+        )
+
+        /**
+         * Looks at the queue on every song change, queue change and end of a background load
+         */
+        private fun startAutoplayJob(): Job =
+            defaultScope.launch {
+                combine(
+                    state
+                        .map { AutoplayTrigger(it.currentIndex, it.queueVersion, it.queueSize, it.loadingState == LoadingState.Loading) }
+                        .distinctUntilChanged(),
+                    queueLoads.running,
+                ) { trigger, loading -> trigger.pagerLoading || loading }.collect { busy ->
+                    try {
+                        checkAutoplay(busy)
+                    } catch (ex: CancellationException) {
+                        throw ex
+                    } catch (ex: Exception) {
+                        Timber.w(ex, "Autoplay: check failed")
+                    }
+                }
+            }
+
+        private suspend fun checkAutoplay(loading: Boolean) {
+            val (size, index, repeatOff) =
+                onMain {
+                    player.currentMediaItem
+                        ?.mediaId
+                        ?.toUUIDOrNull()
+                        ?.let { autoplaySession.markPlayed(it) }
+                    Triple(player.mediaItemCount, player.currentMediaItemIndex, player.repeatMode == Player.REPEAT_MODE_OFF)
+                }
+            val enabled = autoplayEnabled()
+            if (!shouldLoadMore(enabled, repeatOff, size, index, loading || autoplayMutex.isLocked)) return
+            if (autoplayMutex.tryLock()) {
+                try {
+                    loadMore()
+                } finally {
+                    autoplayMutex.unlock()
+                }
+            }
+        }
+
+        /**
+         * Appends the next songs behind the last entry, see [AutoplaySource]. The caller holds [autoplayMutex].
+         */
+        private suspend fun loadMore() {
+            val (queue, lastEntry) =
+                onMain {
+                    val count = player.mediaItemCount
+                    List(count) { (player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem)?.id ?: UUID(0, 0) } to
+                        (if (count > 0) player.getMediaItemAt(count - 1).localConfiguration?.tag as? AudioItem else null)
+                }
+            if (lastEntry == null) return
+            val source = autoplaySession.source
+            val taken = autoplaySession.taken(queue)
+            val set = dislikes.set.value
+            val userId = serverRepository.currentUser?.id
+            var seed: UUID? = null
+            var got = 0
+            var songs = emptyList<BaseItem>()
+            when (source) {
+                is AutoplaySource.InstantMix -> {
+                    for (candidate in autoplaySeeds(queue)) {
+                        val fetched =
+                            api.instantMixApi
+                                .getInstantMixFromItem(
+                                    userId = userId,
+                                    itemId = candidate,
+                                    limit = AUTOPLAY_BATCH,
+                                    fields = DetailItemFields,
+                                ).content.items
+                                .map { BaseItem(it, false) }
+                        seed = candidate
+                        got = fetched.size
+                        songs = filterInstantMix(fetched, candidate, taken, set, lastEntry.artistKey) { it.data.toLightSong() }
+                        if (songs.isNotEmpty()) break
+                    }
+                }
+
+                is AutoplaySource.LibraryRandom -> {
+                    val fetched =
+                        api.libraryApi
+                            .getItems(
+                                parentId = source.libraryId,
+                                includeItemTypes = listOf(BaseItemKind.AUDIO),
+                                recursive = true,
+                                sortBy = listOf(ItemSortBy.RANDOM),
+                                limit = MusicShuffleService.LIBRARY_SAMPLE,
+                                fields = DetailItemFields,
+                            ).content.items
+                            .map { BaseItem(it, false) }
+                    seed = source.libraryId
+                    got = fetched.size
+                    songs =
+                        filterLibraryBatch(
+                            fetched,
+                            taken,
+                            set,
+                            lastEntry.artistKey,
+                            Instant.now(),
+                            Random.Default,
+                        ) { it.data.toLightSong() }
+                }
+            }
+            val keys = if (songs.isEmpty()) emptyList() else insertNextTo(lastEntry.key, false, songs, EntryRule.FULL).orEmpty()
+            Timber.i("Autoplay: source=%s seed=%s got=%d appended=%d", source::class.simpleName, seed, got, keys.size)
+            if (keys.isNotEmpty()) trimPlayed()
+        }
+
+        /**
+         * Drops the entries far in front of the current one, so a queue that grows for hours stays small
+         */
+        private suspend fun trimPlayed() {
+            val trimmed =
+                onMain {
+                    val count = playedToTrim(player.currentMediaItemIndex)
+                    if (count > 0) player.removeMediaItems(0, count)
+                    count
+                }
+            if (trimmed > 0) updateQueueSize()
+        }
 
         private fun entryKey(item: MediaItem) = (item.localConfiguration?.tag as AudioItem).key
 
