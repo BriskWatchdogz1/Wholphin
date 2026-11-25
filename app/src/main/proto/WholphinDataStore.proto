@@ -227,6 +227,8 @@ message MusicPreferences {
   bool show_visualizer = 2;
   bool show_album_Art = 3;
   bool show_backdrop = 4;
+  // 5 is taken by audio_normalization on the audio normalization branch
+  bool autoplay = 6;
 }
 
 enum HdrOverrideMode{

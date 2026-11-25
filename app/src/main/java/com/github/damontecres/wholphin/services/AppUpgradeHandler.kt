@@ -491,6 +491,13 @@ class AppUpgradeHandler
                 }
             }
 
+            if (previous.isEqualOrBefore(Version.fromString("1.1.2-36-g0"))) {
+                // Autoplay for music is on by default, the proto3 zero value is off
+                appPreferences.updateData {
+                    it.updateMusicPreferences { autoplay = true }
+                }
+            }
+
             if (previous.isLessThan(Version.fromString("1.0.10-0-g0"))) {
                 val count = seriesTrackChoiceDao.count()
                 if (count == 0) {

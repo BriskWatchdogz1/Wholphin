@@ -39,4 +39,12 @@ fun getMusicPreferences() =
                 prefs.updateMusicPreferences { showLyrics = value }
             },
         ),
+        AppSwitchPreference<AppPreferences>(
+            title = R.string.music_autoplay,
+            defaultValue = true,
+            getter = { it.musicPreferences.autoplay },
+            setter = { prefs, value ->
+                prefs.updateMusicPreferences { autoplay = value }
+            },
+        ),
     )

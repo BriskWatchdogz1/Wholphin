@@ -818,6 +818,7 @@
     <string name="lyrics">Lyrics</string>
     <string name="hide_lyrics">Hide lyrics</string>
     <string name="show_lyrics">Show lyrics</string>
+    <string name="music_autoplay">Autoplay</string>
     <string name="song_has_lyrics">Song has lyrics</string>
     <string name="remove_from_queue">Remove from queue</string>
     <string name="show_album_cover">Show album cover</string>
