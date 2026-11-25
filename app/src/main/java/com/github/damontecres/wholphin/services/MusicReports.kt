@@ -74,9 +74,12 @@ internal class MusicReportSequencer {
     private var openPositionMs: Long = 0L
     private var lastQueue: ReportedQueue? = null
 
-    private fun stopOpen(positionMs: Long = openPositionMs): MusicReport.Stop? {
+    private fun stopOpen(
+        positionMs: Long = openPositionMs,
+        queueAfter: ReportedQueue? = null,
+    ): MusicReport.Stop? {
         val id = openId ?: return null
-        val queue = lastQueue ?: ReportedQueue(null, null)
+        val queue = queueAfter ?: lastQueue ?: ReportedQueue(null, null)
         openId = null
         return MusicReport.Stop(id, positionMs, queue)
     }
@@ -96,8 +99,14 @@ internal class MusicReportSequencer {
 
     /**
      * The player moved to another entry, also the same song again, or the queue was emptied ([current] null)
+     *
+     * The stop carries the queue as it is after the change: the server takes a session's queue only from
+     * stop reports, so the old queue would stay visible for the whole next song.
      */
-    fun songChanged(current: CurrentSong?): List<MusicReport> = listOfNotNull(stopOpen(), current?.let { start(it) })
+    fun songChanged(current: CurrentSong?): List<MusicReport> {
+        val stop = stopOpen(queueAfter = current?.queue)
+        return listOfNotNull(stop, current?.let { start(it) })
+    }
 
     /**
      * The position the open song had reached when the player left it

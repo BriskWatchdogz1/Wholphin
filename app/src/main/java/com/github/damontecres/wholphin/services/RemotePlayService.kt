@@ -35,6 +35,16 @@ internal data class RemoteQueue(
 )
 
 /**
+ * The rule for songs a remote command inserts into the running queue
+ *
+ * A play next of one song is an explicit choice, like a song started on its own, and is never left out.
+ */
+internal fun ruleForRemoteInsert(
+    command: PlayCommand?,
+    idCount: Int,
+): EntryRule = if (command == PlayCommand.PLAY_NEXT && idCount == 1) EntryRule.EXEMPT else EntryRule.FULL
+
+/**
  * Maps the ids of a play command and the fetched items to a queue of songs
  *
  * Order follows [itemIds]. Missing and non-audio items are dropped. [startIndex] refers to [itemIds];
@@ -286,7 +296,10 @@ class RemotePlayService
                 Timber.i("RemotePlay: nothing playable, ignored")
                 return
             }
-            val rule = musicService.ruleFor(false, ids.size == 1, ids)
+            val rule =
+                ruleForRemoteInsert(request.playCommand, ids.size)
+                    .takeIf { it == EntryRule.EXEMPT }
+                    ?: musicService.ruleFor(false, ids.size == 1, ids)
             val keys =
                 musicService.insertIntoQueue(
                     batch.queue.items,
