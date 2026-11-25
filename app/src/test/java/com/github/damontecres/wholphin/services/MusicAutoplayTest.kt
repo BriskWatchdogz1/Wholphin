@@ -11,6 +11,21 @@ import kotlin.random.Random
 class MusicAutoplayTest {
     private val now = Instant.parse("2026-11-25T12:00:00Z")
 
+    @Test
+    fun `a mix keeps only songs from the seed's library`() {
+        val music = UUID(1, 0)
+        val comedy = UUID(2, 0)
+        val libraries = mapOf("song1" to music, "sketch" to comedy, "song2" to music, "unknown" to null)
+        val kept = keepSeedLibrary(listOf("song1", "sketch", "song2", "unknown"), music) { libraries[it] }
+        assertEquals(listOf("song1", "song2"), kept)
+    }
+
+    @Test
+    fun `an unknown seed library keeps the whole mix`() {
+        val all = listOf("song1", "sketch")
+        assertEquals(all, keepSeedLibrary(all, null) { UUID(2, 0) })
+    }
+
     private fun song(
         artist: String,
         id: UUID = UUID.randomUUID(),
