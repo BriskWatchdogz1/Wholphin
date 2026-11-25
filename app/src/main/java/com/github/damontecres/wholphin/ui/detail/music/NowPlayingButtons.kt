@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -57,6 +58,8 @@ fun NowPlayingButtons(
     initialFocusRequester: FocusRequester,
     onClickMore: () -> Unit,
     onClickStop: () -> Unit,
+    isFavorite: Boolean?,
+    onClickFavorite: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val playPauseState = rememberPlayPauseButtonState(player)
@@ -126,6 +129,11 @@ fun NowPlayingButtons(
             horizontalArrangement = Arrangement.spacedBy(buttonSpacing),
             modifier = Modifier.align(Alignment.CenterEnd),
         ) {
+            FavoriteButton(
+                isFavorite = isFavorite,
+                onClick = onClickFavorite,
+                onControllerInteraction = onControllerInteraction,
+            )
             ShuffleButton(
                 active = shuffleState.shuffleOn,
                 enabled = shuffleState.isEnabled,
@@ -143,6 +151,50 @@ fun NowPlayingButtons(
                 onControllerInteraction = onControllerInteraction,
             )
         }
+    }
+}
+
+@Composable
+fun FavoriteButton(
+    isFavorite: Boolean?,
+    onClick: () -> Unit,
+    onControllerInteraction: () -> Unit,
+    modifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+) {
+    val selectedColor = MaterialTheme.colorScheme.border
+    val focused by interactionSource.collectIsFocusedAsState()
+    Button(
+        enabled = isFavorite != null,
+        onClick = onClick,
+        colors =
+            ClickableSurfaceDefaults.colors(
+                containerColor = AppColors.TransparentBlack25,
+                focusedContainerColor = selectedColor,
+            ),
+        contentPadding = PaddingValues(4.dp),
+        interactionSource = interactionSource,
+        modifier =
+            modifier
+                .size(36.dp, 36.dp)
+                .onFocusChanged { onControllerInteraction.invoke() },
+    ) {
+        Text(
+            text = stringResource(R.string.fa_heart),
+            fontSize = 18.sp,
+            fontFamily = FontAwesome,
+            textAlign = TextAlign.Center,
+            color =
+                when {
+                    isFavorite == true -> Color.Red
+                    focused -> MaterialTheme.colorScheme.surface
+                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = .5f)
+                },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.CenterVertically),
+        )
     }
 }
 
@@ -273,6 +325,11 @@ fun ShuffleButtonPreview() {
     val source = remember { PreviewInteractionSource() }
     WholphinTheme {
         Column {
+            Row {
+                FavoriteButton(isFavorite = null, onClick = {}, onControllerInteraction = {})
+                FavoriteButton(isFavorite = false, onClick = {}, onControllerInteraction = {})
+                FavoriteButton(isFavorite = true, onClick = {}, onControllerInteraction = {})
+            }
             Row {
                 RepeatButton(
                     repeatMode = Player.REPEAT_MODE_OFF,

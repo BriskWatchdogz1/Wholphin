@@ -18,6 +18,7 @@ import com.github.damontecres.wholphin.preferences.updateMusicPreferences
 import com.github.damontecres.wholphin.services.BackdropResult
 import com.github.damontecres.wholphin.services.BackdropService
 import com.github.damontecres.wholphin.services.ExtractedColors
+import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
 import com.github.damontecres.wholphin.services.MusicService
 import com.github.damontecres.wholphin.services.NavigationManager
@@ -25,6 +26,7 @@ import com.github.damontecres.wholphin.services.NowPlayingStatus
 import com.github.damontecres.wholphin.services.UserPreferencesService
 import com.github.damontecres.wholphin.ui.combinePair
 import com.github.damontecres.wholphin.ui.launchDefault
+import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.main.settings.MoveDirection
 import com.github.damontecres.wholphin.ui.onMain
 import com.github.damontecres.wholphin.ui.playback.ControllerViewState
@@ -50,6 +52,7 @@ import kotlinx.coroutines.sync.withLock
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.api.client.extensions.lyricApi
+import org.jellyfin.sdk.api.client.extensions.userDataApi
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.LyricDto
@@ -70,6 +73,7 @@ class NowPlayingViewModel
         private val api: ApiClient,
         private val musicService: MusicService,
         private val backdropService: BackdropService,
+        private val favoriteWatchManager: FavoriteWatchManager,
         private val imageUrlService: ImageUrlService,
         private val preferencesDataStore: DataStore<AppPreferences>,
         val navigationManager: NavigationManager,
@@ -102,9 +106,12 @@ class NowPlayingViewModel
             }
 
         init {
+            val audio = player.currentMediaItem?.localConfiguration?.tag as? AudioItem
             state.update {
-                it.copy(currentMediaItem = player.currentMediaItem?.localConfiguration?.tag as? AudioItem)
+                it.copy(currentMediaItem = audio)
             }
+            // The screen usually opens while a song plays, without a media item transition
+            loadFavorite(audio)
             player.addListener(this)
             addCloseable {
                 player.removeListener(this)
@@ -175,12 +182,46 @@ class NowPlayingViewModel
         ) {
             val audio = mediaItem?.localConfiguration?.tag as? AudioItem
             Timber.v("onMediaItemTransition to %s", audio?.id)
-            state.update {
-                it.copy(
-                    currentMediaItem = audio,
-                    lyrics = null,
-                    currentLyricIndex = null,
-                )
+            state.update { it.onSongChange(audio) }
+            loadFavorite(audio)
+        }
+
+        /**
+         * Load whether [audio] is a favorite; the answer only applies while it is still the current song
+         */
+        private fun loadFavorite(audio: AudioItem?) {
+            if (audio == null) return
+            viewModelScope.launchIO {
+                try {
+                    val isFavorite =
+                        api.userDataApi
+                            .getItemUserData(audio.id)
+                            .content.isFavorite
+                    state.update { it.withFavorite(audio.id, isFavorite) }
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Timber.w(ex, "Error fetching favorite state for %s", audio.id)
+                }
+            }
+        }
+
+        /**
+         * Toggle the favorite of the current song and show the state the server answers with
+         */
+        fun toggleFavorite() {
+            val current = state.value
+            val itemId = current.currentMediaItem?.id ?: return
+            val desired = !(current.isFavorite ?: false)
+            viewModelScope.launchIO {
+                try {
+                    val isFavorite = favoriteWatchManager.setFavorite(itemId, desired).isFavorite
+                    state.update { it.withFavorite(itemId, isFavorite) }
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Timber.w(ex, "Error setting favorite for %s", itemId)
+                }
             }
         }
 

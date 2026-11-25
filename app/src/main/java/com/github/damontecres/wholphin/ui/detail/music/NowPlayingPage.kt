@@ -358,6 +358,7 @@ fun NowPlayingPage(
                 onClickMoreItem = { index, song -> showContextForItem.invoke(false, index, song) },
                 onLongClickSong = { index, song -> showContextForItem.invoke(true, index, song) },
                 onClickStop = { viewModel.stop() },
+                onClickFavorite = { viewModel.toggleFavorite() },
                 lyricsFocusRequester = lyricsFocusRequester,
                 modifier =
                     Modifier
