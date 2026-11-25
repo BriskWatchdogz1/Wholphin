@@ -32,7 +32,6 @@ import androidx.media3.ui.compose.state.rememberNextButtonState
 import androidx.media3.ui.compose.state.rememberPlayPauseButtonState
 import androidx.media3.ui.compose.state.rememberPreviousButtonState
 import androidx.media3.ui.compose.state.rememberRepeatButtonState
-import androidx.media3.ui.compose.state.rememberShuffleButtonState
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -62,12 +61,12 @@ fun NowPlayingButtons(
     onClickFavorite: () -> Unit,
     isDisliked: Boolean?,
     onClickDislike: () -> Unit,
+    onClickShuffle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val playPauseState = rememberPlayPauseButtonState(player)
     val previousState = rememberPreviousButtonState(player)
     val nextState = rememberNextButtonState(player)
-    val shuffleState = rememberShuffleButtonState(player)
     val repeatState = rememberRepeatButtonState(player)
 
     val onControllerInteraction = remember { { controllerViewState.pulseControls() } }
@@ -141,12 +140,11 @@ fun NowPlayingButtons(
                 onClick = onClickDislike,
                 onControllerInteraction = onControllerInteraction,
             )
+            // Mixes the songs after the current one; there is no shuffle mode to switch on or off
             ShuffleButton(
-                active = shuffleState.shuffleOn,
-                enabled = shuffleState.isEnabled,
-                onClick = {
-                    shuffleState.onClick()
-                },
+                active = false,
+                enabled = nextState.isEnabled,
+                onClick = onClickShuffle,
                 onControllerInteraction = onControllerInteraction,
             )
             RepeatButton(

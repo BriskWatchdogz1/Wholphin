@@ -22,6 +22,7 @@ import com.github.damontecres.wholphin.services.ExtractedColors
 import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.NowPlayingStatus
 import com.github.damontecres.wholphin.services.UserPreferencesService
@@ -76,6 +77,7 @@ class NowPlayingViewModel
         private val backdropService: BackdropService,
         private val favoriteWatchManager: FavoriteWatchManager,
         private val dislikes: DislikeService,
+        private val shuffleService: MusicShuffleService,
         private val imageUrlService: ImageUrlService,
         private val preferencesDataStore: DataStore<AppPreferences>,
         val navigationManager: NavigationManager,
@@ -224,6 +226,13 @@ class NowPlayingViewModel
                     Timber.w(ex, "Error setting favorite for %s", itemId)
                 }
             }
+        }
+
+        /**
+         * Put the songs after the current one in a new smart shuffle order; the current song and earlier ones stay
+         */
+        fun shuffleUpcoming() {
+            viewModelScope.launchIO { shuffleService.shuffleUpcoming() }
         }
 
         /**

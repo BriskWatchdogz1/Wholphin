@@ -210,7 +210,7 @@ class MusicService
                         .map { BaseItem(it, false) }
                 // The server already filters the mix; the client filter is a cheap safety net
                 dislikes.refresh()
-                setQueue(items, false, EntryRule.FULL)
+                setQueue(items, EntryRule.FULL)
             }
 
         /**
@@ -221,13 +221,12 @@ class MusicService
         suspend fun setQueue(
             items: BlockingList<BaseItem?>,
             startIndex: Int,
-            shuffled: Boolean,
             rule: EntryRule = EntryRule.FULL,
         ) = withContext(WholphinDispatchers.IO) {
-            Timber.d("setQueue: %s items, startIndex=%s, shuffled=%s, rule=%s", items.size, startIndex, shuffled, rule)
+            Timber.d("setQueue: %s items, startIndex=%s, rule=%s", items.size, startIndex, rule)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(emptyList())
-                player.shuffleModeEnabled = shuffled
+                player.shuffleModeEnabled = false
             }
             start()
             addAllToQueue(items, startIndex, rule)
@@ -238,14 +237,13 @@ class MusicService
          */
         suspend fun setQueue(
             items: List<BaseItem>,
-            shuffled: Boolean,
             rule: EntryRule = EntryRule.FULL,
         ) {
-            Timber.d("setQueue: %s items, shuffled=%s, rule=%s", items.size, shuffled, rule)
+            Timber.d("setQueue: %s items, rule=%s", items.size, rule)
             val mediaItems = convertSongs(items, rule)
             withContext(WholphinDispatchers.Main) {
                 player.setMediaItems(mediaItems)
-                player.shuffleModeEnabled = shuffled
+                player.shuffleModeEnabled = false
                 updateQueueSize()
                 start()
             }
@@ -422,6 +420,35 @@ class MusicService
                 }
             if (removed > 0) {
                 Timber.i("MusicService: removed %d disliked songs from the queue", removed)
+                updateQueueSize()
+            }
+        }
+
+        /**
+         * Put the entries after the current one in the order of [order] (song ids), see [planReorder]
+         *
+         * The current entry and the ones before it stay. The queue is read when this runs, so entries that
+         * arrived or left since [order] was computed are handled.
+         */
+        suspend fun applyUpcomingOrder(order: List<UUID>) {
+            val moved =
+                onMain {
+                    val queue =
+                        List(player.mediaItemCount) {
+                            (player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem)?.id ?: UUID(0, 0)
+                        }
+                    val current = player.currentMediaItemIndex
+                    val plan = planReorder(queue, current, order)
+                    if (plan == null) {
+                        0
+                    } else {
+                        val items = plan.map { player.getMediaItemAt(it) }
+                        player.replaceMediaItems(current + 1, player.mediaItemCount, items)
+                        items.size
+                    }
+                }
+            if (moved > 0) {
+                Timber.i("MusicService: reordered %d upcoming songs", moved)
                 updateQueueSize()
             }
         }

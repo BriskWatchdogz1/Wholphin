@@ -360,6 +360,7 @@ fun NowPlayingPage(
                 onClickStop = { viewModel.stop() },
                 onClickFavorite = { viewModel.toggleFavorite() },
                 onClickDislike = { viewModel.toggleDislike() },
+                onClickShuffle = { viewModel.shuffleUpcoming() },
                 lyricsFocusRequester = lyricsFocusRequester,
                 modifier =
                     Modifier

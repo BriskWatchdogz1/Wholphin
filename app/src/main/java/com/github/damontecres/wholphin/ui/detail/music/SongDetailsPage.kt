@@ -29,6 +29,7 @@ import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
 import com.github.damontecres.wholphin.services.MediaManagementService
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.ui.RequestOrRestoreFocus
 import com.github.damontecres.wholphin.ui.components.ContextMenu
@@ -68,10 +69,11 @@ class SongViewModel
         musicService: MusicService,
         navigationManager: NavigationManager,
         mediaManagementService: MediaManagementService,
+        shuffleService: MusicShuffleService,
         private val favoriteWatchManager: FavoriteWatchManager,
         private val imageUrlService: ImageUrlService,
         @Assisted itemId: UUID,
-    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService) {
+    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService, shuffleService) {
         @AssistedFactory
         interface Factory {
             fun create(itemId: UUID): SongViewModel

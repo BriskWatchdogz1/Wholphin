@@ -22,7 +22,9 @@ import com.github.damontecres.wholphin.preferences.UserPreferences
 import com.github.damontecres.wholphin.services.BackdropService
 import com.github.damontecres.wholphin.services.EntryRule
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
+import com.github.damontecres.wholphin.services.ShuffleSource
 import com.github.damontecres.wholphin.ui.components.CollectionFolderView
 import com.github.damontecres.wholphin.ui.components.ErrorMessage
 import com.github.damontecres.wholphin.ui.components.GenreCardGrid
@@ -55,6 +57,7 @@ class CollectionFolderMusicViewModel
         private val api: ApiClient,
         private val serverRepository: ServerRepository,
         private val musicService: MusicService,
+        private val shuffleService: MusicShuffleService,
         private val navigationManager: NavigationManager,
         val backdropService: BackdropService,
         @Assisted private val itemId: UUID,
@@ -67,7 +70,7 @@ class CollectionFolderMusicViewModel
         fun play(item: BaseItem) {
             if (item.type == BaseItemKind.AUDIO) {
                 viewModelScope.launchDefault {
-                    musicService.setQueue(listOf(item), false, EntryRule.EXEMPT)
+                    musicService.setQueue(listOf(item), EntryRule.EXEMPT)
                 }
             }
         }
@@ -80,6 +83,10 @@ class CollectionFolderMusicViewModel
         }
 
         fun onClickPlayAll(shuffle: Boolean) {
+            if (shuffle) {
+                viewModelScope.launchDefault { shuffleService.shuffle(ShuffleSource.Library(itemId)) }
+                return
+            }
             viewModelScope.launchDefault {
                 val request =
                     GetItemsRequest(
@@ -89,7 +96,7 @@ class CollectionFolderMusicViewModel
                         recursive = true,
                     )
                 val pager = ApiRequestPager(api, request, GetItemsRequestHandler, viewModelScope).init()
-                musicService.setQueue(pager, 0, shuffle, musicService.ruleFor(false, false))
+                musicService.setQueue(pager, 0, musicService.ruleFor(false, false))
             }
         }
 
@@ -99,7 +106,7 @@ class CollectionFolderMusicViewModel
         ) {
             if (item.type == BaseItemKind.AUDIO) {
                 viewModelScope.launchDefault {
-                    musicService.setQueue(listOf(item), false, EntryRule.EXEMPT)
+                    musicService.setQueue(listOf(item), EntryRule.EXEMPT)
                 }
             }
         }

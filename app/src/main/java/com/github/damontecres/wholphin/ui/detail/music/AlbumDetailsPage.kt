@@ -55,8 +55,10 @@ import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
 import com.github.damontecres.wholphin.services.MediaManagementService
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.ServerReportService
+import com.github.damontecres.wholphin.services.ShuffleSource
 import com.github.damontecres.wholphin.services.UserPreferencesService
 import com.github.damontecres.wholphin.ui.AspectRatios
 import com.github.damontecres.wholphin.ui.ItemRowFields
@@ -116,6 +118,7 @@ class AlbumViewModel
         musicService: MusicService,
         navigationManager: NavigationManager,
         mediaManagementService: MediaManagementService,
+        shuffleService: MusicShuffleService,
         val serverRepository: ServerRepository,
         val serverReportService: ServerReportService,
         private val favoriteWatchManager: FavoriteWatchManager,
@@ -125,7 +128,7 @@ class AlbumViewModel
         private val extrasService: ExtrasService,
         @Assisted("itemId") itemId: UUID,
         @Assisted("initialSongId") private val initialSongId: UUID?,
-    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService) {
+    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService, shuffleService) {
         @AssistedFactory
         interface Factory {
             fun create(
@@ -263,8 +266,12 @@ class AlbumViewModel
             shuffled: Boolean,
             startIndex: Int = 0,
         ) {
-            val songs = state.value.songs as ApiRequestPager<*>
-            play(songs, startIndex, shuffled, EntryRule.ITEMS_ONLY)
+            if (shuffled) {
+                viewModelScope.launchIO { shuffleService.shuffle(ShuffleSource.Album(itemId)) }
+            } else {
+                val songs = state.value.songs as ApiRequestPager<*>
+                play(songs, startIndex, EntryRule.ITEMS_ONLY)
+            }
         }
     }
 

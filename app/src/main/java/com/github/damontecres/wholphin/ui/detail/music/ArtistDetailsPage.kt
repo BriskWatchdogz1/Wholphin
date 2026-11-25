@@ -50,6 +50,7 @@ import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.ImageUrlService
 import com.github.damontecres.wholphin.services.MediaManagementService
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.ServerReportService
 import com.github.damontecres.wholphin.services.UserPreferencesService
@@ -113,6 +114,7 @@ class ArtistViewModel
         musicService: MusicService,
         navigationManager: NavigationManager,
         mediaManagementService: MediaManagementService,
+        shuffleService: MusicShuffleService,
         val serverRepository: ServerRepository,
         val serverReportService: ServerReportService,
         private val favoriteWatchManager: FavoriteWatchManager,
@@ -120,7 +122,7 @@ class ArtistViewModel
         private val backdropService: BackdropService,
         private val imageUrlService: ImageUrlService,
         @Assisted itemId: UUID,
-    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService) {
+    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService, shuffleService) {
         @AssistedFactory
         interface Factory {
             fun create(itemId: UUID): ArtistViewModel

@@ -313,6 +313,25 @@ class RemotePlayService
             startLoader(ids.size, keys.size, after, before, keys.firstOrNull(), keys.lastOrNull(), rule)
         }
 
+        /**
+         * Replace the queue with the songs [ids] in exactly this order: playback starts with the first chunk,
+         * a background job loads the rest. For an order the app built itself (shuffle).
+         */
+        internal suspend fun playIds(
+            ids: List<UUID>,
+            rule: EntryRule,
+        ) = mutex.withLock {
+            val chunks = planRemoteLoad(ids, 0).fromStart
+            val batch = firstBatch(chunks, 0, null)
+            if (batch == null) {
+                Timber.i("RemotePlay: nothing playable in %d ids, ignored", ids.size)
+                return@withLock
+            }
+            cancelLoaders()
+            val keys = musicService.playQueue(batch.queue.items, 0, 0, rule)
+            startLoader(ids.size, keys.size, chunks.drop(batch.chunkIndex + 1), emptyList(), keys.firstOrNull(), keys.lastOrNull(), rule)
+        }
+
         private suspend fun showNowPlaying() =
             withContext(WholphinDispatchers.Main) {
                 if (navigationManager.backStack.lastOrNull() !is Destination.NowPlaying) {

@@ -40,6 +40,7 @@ import com.github.damontecres.wholphin.data.model.CollectionFolderFilter
 import com.github.damontecres.wholphin.preferences.UserPreferences
 import com.github.damontecres.wholphin.services.MediaManagementService
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.ui.FontAwesome
 import com.github.damontecres.wholphin.ui.cards.FavoriteIndicator
@@ -115,10 +116,11 @@ class PlaylistViewModel
         navigationManager: NavigationManager,
         musicService: MusicService,
         mediaManagementService: MediaManagementService,
+        shuffleService: MusicShuffleService,
         private val serverRepository: ServerRepository,
         @Assisted itemId: UUID,
         @Assisted private val collectionState: StateFlow<CollectionFolderState>,
-    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService) {
+    ) : MusicViewModel(itemId, context, api, musicService, navigationManager, mediaManagementService, shuffleService) {
         @AssistedFactory
         interface Factory {
             fun create(

@@ -8,7 +8,9 @@ import com.github.damontecres.wholphin.preferences.AppPreferences
 import com.github.damontecres.wholphin.services.EntryRule
 import com.github.damontecres.wholphin.services.MediaManagementService
 import com.github.damontecres.wholphin.services.MusicService
+import com.github.damontecres.wholphin.services.MusicShuffleService
 import com.github.damontecres.wholphin.services.NavigationManager
+import com.github.damontecres.wholphin.services.ShuffleSource
 import com.github.damontecres.wholphin.services.deleteItem
 import com.github.damontecres.wholphin.ui.launchDefault
 import com.github.damontecres.wholphin.ui.launchIO
@@ -28,15 +30,15 @@ abstract class MusicViewModel(
     internal val musicService: MusicService,
     internal val navigationManager: NavigationManager,
     internal val mediaManagementService: MediaManagementService,
+    internal val shuffleService: MusicShuffleService,
 ) : ViewModel() {
     fun play(
         pager: ApiRequestPager<*>,
         startIndex: Int = 0,
-        shuffled: Boolean = false,
         rule: EntryRule = EntryRule.FULL,
     ) {
         viewModelScope.launchIO {
-            musicService.setQueue(pager, startIndex, shuffled, rule)
+            musicService.setQueue(pager, startIndex, rule)
         }
     }
 
@@ -49,24 +51,36 @@ abstract class MusicViewModel(
             Timber.v("Playing %s %s", item.type, item.id)
             when (item.type) {
                 BaseItemKind.AUDIO -> {
-                    musicService.setQueue(listOf(item), shuffled, EntryRule.EXEMPT)
+                    musicService.setQueue(listOf(item), EntryRule.EXEMPT)
                 }
 
                 BaseItemKind.MUSIC_ALBUM -> {
-                    val pager = getPagerForAlbum(api, item.id)
-                    musicService.setQueue(pager, startIndex, shuffled, musicService.ruleFor(true, false))
+                    if (shuffled) {
+                        shuffleService.shuffle(ShuffleSource.Album(item.id))
+                    } else {
+                        val pager = getPagerForAlbum(api, item.id)
+                        musicService.setQueue(pager, startIndex, musicService.ruleFor(true, false))
+                    }
                 }
 
                 BaseItemKind.MUSIC_ARTIST -> {
-                    val pager = getPagerForArtist(api, item.id)
-                    musicService.setQueue(pager, startIndex, shuffled, musicService.ruleFor(true, false))
+                    if (shuffled) {
+                        shuffleService.shuffle(ShuffleSource.Artist(item.id))
+                    } else {
+                        val pager = getPagerForArtist(api, item.id)
+                        musicService.setQueue(pager, startIndex, musicService.ruleFor(true, false))
+                    }
                 }
 
                 BaseItemKind.PLAYLIST -> {
-                    val pager = getPagerForPlaylist(api, item.id)
-                    // A playlist of only disliked songs (such as a playlist of dislikes) plays as it is
-                    val rule = musicService.ruleFor(false, false, musicService.playlistSongIds(item.id))
-                    musicService.setQueue(pager, startIndex, shuffled, rule)
+                    if (shuffled) {
+                        shuffleService.shuffle(ShuffleSource.Playlist(item.id))
+                    } else {
+                        val pager = getPagerForPlaylist(api, item.id)
+                        // A playlist of only disliked songs (such as a playlist of dislikes) plays as it is
+                        val rule = musicService.ruleFor(false, false, musicService.playlistSongIds(item.id))
+                        musicService.setQueue(pager, startIndex, rule)
+                    }
                 }
 
                 else -> {
