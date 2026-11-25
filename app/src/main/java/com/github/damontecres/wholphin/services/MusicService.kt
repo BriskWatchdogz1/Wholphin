@@ -25,8 +25,6 @@ import com.github.damontecres.wholphin.ui.seekForward
 import com.github.damontecres.wholphin.ui.toServerString
 import com.github.damontecres.wholphin.util.BlockingList
 import com.github.damontecres.wholphin.util.LoadingState
-import com.github.damontecres.wholphin.util.PlaybackItemState
-import com.github.damontecres.wholphin.util.TrackActivityPlaybackListener
 import com.github.damontecres.wholphin.util.WholphinDispatchers
 import com.github.damontecres.wholphin.util.profile.Codec
 import com.github.damontecres.wholphin.util.profile.supportedAudioCodecs
@@ -50,7 +48,6 @@ import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.MediaStreamType
-import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.PlaystateCommand
 import org.jellyfin.sdk.model.api.PlaystateMessage
 import org.jellyfin.sdk.model.api.QueueItem
@@ -104,7 +101,7 @@ class MusicService
         private val mutex = Mutex()
         var mediaSession: MediaSession? = null
             private set
-        private var activityTracker: TrackActivityPlaybackListener? = null
+        private var reporter: MusicPlaybackReporter? = null
         private var websocketJob: Job? = null
 
         private suspend fun preferAc3Surround() =
@@ -128,30 +125,30 @@ class MusicService
                                 .Builder(context, player)
                                 .setCallback(TrustAllControllersCallback)
                                 .build()
-                        activityTracker =
-                            TrackActivityPlaybackListener(api, player) {
-                                state.value.currentItemId?.let { itemId ->
-                                    // The player may only be read on the main thread
+                        reporter =
+                            MusicPlaybackReporter(api, player, defaultScope) {
+                                // Runs on the main thread, the only one that may read the player
+                                val itemId = (player.currentMediaItem?.localConfiguration?.tag as? AudioItem)?.id
+                                if (itemId == null || !isPlayingSong(player.playbackState)) {
+                                    null
+                                } else {
+                                    val currentIndex = player.currentMediaItemIndex
+                                    val range = reportedQueueRange(player.mediaItemCount, currentIndex)
                                     val (queue, playlistItemId) =
-                                        onMain {
-                                            val current = player.currentMediaItemIndex
-                                            val range = reportedQueueRange(player.mediaItemCount, current)
-                                            queueReport(
-                                                range.map {
-                                                    player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem
-                                                },
-                                                current - range.first,
-                                            )
-                                        }
-                                    PlaybackItemState(
+                                        queueReport(
+                                            range.map {
+                                                player.getMediaItemAt(it).localConfiguration?.tag as? AudioItem
+                                            },
+                                            currentIndex - range.first,
+                                        )
+                                    CurrentSong(
                                         itemId = itemId,
-                                        playMethod = PlayMethod.DIRECT_PLAY,
-                                        playlistItemId = playlistItemId,
-                                        nowPlayingQueue = queue,
-//                                        playSessionId = mediaSession?.id,
+                                        positionMs = player.currentPosition,
+                                        isPaused = !player.isPlaying,
+                                        queue = ReportedQueue(playlistItemId, queue),
                                     )
                                 }
-                            }.also { player.addListener(it) }
+                            }.also { r -> onMain { r.start() } }
                         websocketJob = subscribe()
                     }
                 }
@@ -176,11 +173,8 @@ class MusicService
                 onMain {
                     websocketJob?.cancel()
                     websocketJob = null
-                    activityTracker?.let {
-                        it.release()
-                        player.removeListener(it)
-                    }
-                    activityTracker = null
+                    reporter?.release()
+                    reporter = null
                     player.stop()
                     player.setMediaItems(emptyList())
                 }
